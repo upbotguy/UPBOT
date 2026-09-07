@@ -398,26 +398,65 @@ window.handleCustomSlippageInput = handleCustomSlippageInput;
 let isDraggingLimitLine = false;
 let draggedOrderId = null;
 
-// Bijective coordinate mapping functions between Chart Top % (10% to 90%) and Price Difference % (-50% to +200%)
+// Bijective coordinate mapping functions calibrated to DexScreener / TradingView candle proportions
 function priceDiffToTopPercent(diffPct) {
   if (diffPct >= 0) {
-    // 0% -> 60%, +200% -> 10%
-    return Math.max(10, Math.min(60, 60 - (diffPct / 200) * 50));
+    // Current price is at 50%
+    // +10% gain -> 40% (just above recent candles)
+    // +25% gain -> 25% (upper resistance)
+    // +50% gain -> 16%
+    // +100% gain -> 10%
+    if (diffPct <= 25) {
+      return 50 - (diffPct / 25) * 25;
+    } else if (diffPct <= 100) {
+      return 25 - ((diffPct - 25) / 75) * 15;
+    } else {
+      return 10;
+    }
   } else {
-    // 0% -> 60%, -50% -> 90%
+    // Current price is at 50%
+    // -5% dip -> 55.3%
+    // -7.7% dip -> 58.2% (just below current candle!)
+    // -10% dip -> 60.7%
+    // -15% dip -> 66%
+    // -20% dip -> 71.3%
+    // -30% dip -> 82%
+    // -45% dip -> 88%
     const dip = Math.abs(diffPct);
-    return Math.max(60, Math.min(90, 60 + (dip / 50) * 30));
+    if (dip <= 30) {
+      return 50 + (dip / 30) * 32;
+    } else if (dip <= 60) {
+      return 82 + ((dip - 30) / 30) * 6;
+    } else {
+      return 88;
+    }
   }
 }
 
 function topPercentToPrice(topPct, currentPrice) {
-  const clampedTop = Math.max(10, Math.min(90, topPct));
+  const clampedTop = Math.max(10, Math.min(88, topPct));
   let diffPct = 0;
-  if (clampedTop <= 60) {
-    diffPct = ((60 - clampedTop) / 50) * 200; // 0% to +200%
+
+  if (clampedTop <= 50) {
+    // Moving UP (Gains / Take Profit)
+    if (clampedTop >= 25) {
+      // 50% down to 25% -> 0% to +25%
+      diffPct = ((50 - clampedTop) / 25) * 25;
+    } else {
+      // 25% down to 10% -> +25% to +100%
+      diffPct = 25 + ((25 - clampedTop) / 15) * 75;
+    }
   } else {
-    diffPct = -((clampedTop - 60) / 30) * 50; // 0% to -50%
+    // Moving DOWN (Dips / Stop Loss)
+    if (clampedTop <= 82) {
+      // 50% up to 82% -> 0% to -30%
+      diffPct = -((clampedTop - 50) / 32) * 30;
+    } else {
+      // 82% up to 88% -> -30% to -60%
+      diffPct = -(30 + ((clampedTop - 82) / 6) * 30);
+    }
   }
+
   const targetPrice = Math.max(0.00000001, currentPrice * (1 + diffPct / 100));
   return { targetPrice, diffPct };
 }
