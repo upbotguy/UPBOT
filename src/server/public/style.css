@@ -704,8 +704,16 @@ body {
 }
 
 .chart-container.is-dragging-order {
-  user-select: none;
-  cursor: ns-resize;
+  user-select: none !important;
+  cursor: ns-resize !important;
+}
+
+.chart-container.is-dragging-order iframe {
+  pointer-events: none !important;
+}
+
+.chart-container.is-dragging-order .limit-lines-overlay {
+  pointer-events: auto !important;
 }
 
 .chart-limit-line-item {
