@@ -379,7 +379,20 @@ function handleCustomSlippageInput(val) {
   });
 }
 
+// Info & Guide Modal Helpers
+function openInfoModal() {
+  const modal = document.getElementById('infoModal');
+  if (modal) modal.classList.remove('hidden');
+}
+
+function closeInfoModal() {
+  const modal = document.getElementById('infoModal');
+  if (modal) modal.classList.add('hidden');
+}
+
 // Global Window Exports
+window.openInfoModal = openInfoModal;
+window.closeInfoModal = closeInfoModal;
 window.toggleCurrentFavorite = toggleCurrentFavorite;
 window.promptAddFavorite = promptAddFavorite;
 window.toggleFavorite = toggleFavorite;

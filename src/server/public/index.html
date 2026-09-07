@@ -63,6 +63,7 @@
         </div>
       </div>
 
+      <button id="btnInfoModal" class="btn-secondary-sm" onclick="openInfoModal()">ℹ️ Guide</button>
       <button id="btnSettings" class="btn-secondary-sm">⚙️ Settings</button>
       <button id="btnTgBotLink" class="btn-tg" onclick="handleTgBotClick()">🤖 TG Bot</button>
     </div>
@@ -509,6 +510,61 @@
       </div>
       <div class="modal-footer">
         <button id="btnSaveSettings" class="btn-execute buy">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Terminal & Bot Info / Guide Modal -->
+  <div id="infoModal" class="modal-backdrop hidden">
+    <div class="modal-card info-modal-card">
+      <div class="modal-header">
+        <h2>⚡ UPBOT AI Terminal Guide</h2>
+        <button class="modal-close" onclick="closeInfoModal()">&times;</button>
+      </div>
+      <div class="modal-body info-modal-body">
+        <div class="info-hero-banner">
+          <div class="info-hero-title">0% Fee Self-Hosted Solana Trading Terminal</div>
+          <p class="info-hero-desc">UPBOT AI runs 100% locally on your machine with direct Jupiter V6 routing, non-custodial wallet management, and zero platform fees.</p>
+        </div>
+
+        <div class="info-grid">
+          <div class="info-card">
+            <div class="info-card-header">
+              <span class="info-icon">🤖</span>
+              <h3>1. Local Bot Wallet Mode</h3>
+            </div>
+            <p>Runs directly on your machine. Keys are locally encrypted with AES-256 in SQLite. Supports <strong>24/7 background Limit Orders, Dip Buying, Take Profit, and Stop Loss</strong> execution even when the browser tab is closed.</p>
+          </div>
+
+          <div class="info-card">
+            <div class="info-card-header">
+              <span class="info-icon">👻</span>
+              <h3>2. Browser Extension Mode</h3>
+            </div>
+            <p>Connect instantly with <strong>Phantom, Solflare, or Backpack</strong>. Trade directly without importing private keys. Every transaction is approved securely inside your browser wallet.</p>
+          </div>
+
+          <div class="info-card">
+            <div class="info-card-header">
+              <span class="info-icon">💬</span>
+              <h3>3. Telegram Bot (Optional)</h3>
+            </div>
+            <p>Connect your personal Telegram Bot Token in <code>.env</code> to trade from mobile. Telegram is 100% optional — the Web UI works completely standalone!</p>
+          </div>
+
+          <div class="info-card">
+            <div class="info-card-header">
+              <span class="info-icon">🛡️</span>
+              <h3>4. 0% Platform Fees</h3>
+            </div>
+            <p>Unlike centralized Telegram trading bots that charge 1% on every single trade, UPBOT AI takes <strong>0% cut</strong>. All swaps route via Jupiter V6 for the absolute best market rates.</p>
+          </div>
+        </div>
+
+        <div class="info-footer-box">
+          <div class="info-footer-tag">💡 Quick Tip</div>
+          <span>Switch between <strong>Bot Wallet</strong> and <strong>Extension</strong> anytime from the top navigation bar.</span>
+        </div>
       </div>
     </div>
   </div>
