@@ -762,14 +762,32 @@ export function createWebServer() {
 }
 
 /**
- * Start the Express web server
+ * Start the Express web server with auto-fallback if port is occupied
  */
-export function startWebServer(port = CONFIG.PORT || 3000) {
+export function startWebServer(initialPort = CONFIG.PORT || 3000) {
   const app = createWebServer();
-  return app.listen(port, () => {
-    console.log(`\n======================================================`);
-    console.log(`🌐 MYAN BOT AI Web Trading Terminal is LIVE!`);
-    console.log(`👉 Open in your browser: http://localhost:${port}`);
-    console.log(`======================================================\n`);
-  });
+
+  function tryListen(portToTry: number): any {
+    const server = app.listen(portToTry, () => {
+      console.log(`\n======================================================`);
+      console.log(`UPBOT AI Web Trading Terminal is LIVE!`);
+      console.log(`Open in your browser: http://localhost:${portToTry}`);
+      console.log(`======================================================\n`);
+    });
+
+    server.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`[Port Conflict] Port ${portToTry} is already in use by another application.`);
+        const nextPort = portToTry + 1;
+        console.log(`[Auto-Switch] Automatically attempting to start on port ${nextPort}...`);
+        tryListen(nextPort);
+      } else {
+        console.error('[Web Server Error]', err);
+      }
+    });
+
+    return server;
+  }
+
+  return tryListen(initialPort);
 }
