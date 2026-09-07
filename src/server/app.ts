@@ -16,6 +16,7 @@ import {
   getUserLimitOrders,
   createLimitOrder,
   cancelLimitOrder,
+  updateLimitOrderDetails,
   recordTrade,
   getUserTokenPosition,
   getUserRecentTrades,
@@ -473,6 +474,28 @@ export function createWebServer() {
       const orderId = parseInt(req.params.id, 10);
       const { userId } = getWebActiveWallet();
       const success = cancelLimitOrder(userId, orderId);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * Update Limit Order (Drag-and-drop on chart or edit)
+   */
+  app.post('/api/orders/update/:id', async (req, res) => {
+    try {
+      const orderId = parseInt(req.params.id, 10);
+      const { targetPriceUsd, condition, amountSol, amountPercent } = req.body;
+      const { userId } = getWebActiveWallet();
+
+      const success = updateLimitOrderDetails(userId, orderId, {
+        targetPriceUsd: targetPriceUsd !== undefined ? parseFloat(targetPriceUsd) : undefined,
+        condition,
+        amountSol: amountSol !== undefined ? parseFloat(amountSol) : undefined,
+        amountPercent: amountPercent !== undefined ? parseFloat(amountPercent) : undefined,
+      });
+
       res.json({ success });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });

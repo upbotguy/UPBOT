@@ -703,6 +703,11 @@ body {
   z-index: 20;
 }
 
+.chart-container.is-dragging-order {
+  user-select: none;
+  cursor: ns-resize;
+}
+
 .chart-limit-line-item {
   position: absolute;
   left: 0;
@@ -712,7 +717,14 @@ body {
   justify-content: flex-end;
   padding-right: 12px;
   pointer-events: auto;
-  transition: top 0.3s ease;
+  transition: top 0.25s ease;
+  user-select: none;
+  cursor: ns-resize;
+}
+
+.chart-limit-line-item.dragging {
+  transition: none !important;
+  z-index: 100;
 }
 
 .chart-limit-line-item::before {
@@ -723,6 +735,14 @@ body {
   height: 0;
   border-bottom: 2px dashed;
   opacity: 0.85;
+  transition: all 0.2s;
+}
+
+.chart-limit-line-item:hover::before,
+.chart-limit-line-item.dragging::before {
+  border-bottom-style: solid;
+  opacity: 1;
+  border-bottom-width: 2.5px;
 }
 
 .chart-limit-line-item.buy::before {
@@ -730,9 +750,17 @@ body {
   box-shadow: 0 0 8px rgba(0, 255, 163, 0.6);
 }
 
+.chart-limit-line-item.buy.dragging::before {
+  box-shadow: 0 0 16px rgba(0, 255, 163, 0.95);
+}
+
 .chart-limit-line-item.sell::before {
   border-color: var(--primary-red);
   box-shadow: 0 0 8px rgba(255, 59, 48, 0.6);
+}
+
+.chart-limit-line-item.sell.dragging::before {
+  box-shadow: 0 0 16px rgba(255, 59, 48, 0.95);
 }
 
 .chart-limit-badge {
@@ -740,14 +768,62 @@ body {
   z-index: 2;
   background: #0B0E17;
   border-radius: 6px;
-  padding: 3px 10px;
+  padding: 4px 10px;
   font-size: 11px;
   font-family: var(--font-mono);
   font-weight: 800;
   display: flex;
   align-items: center;
-  gap: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+  gap: 7px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.7);
+  cursor: grab;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.chart-limit-badge:hover {
+  transform: scale(1.02);
+}
+
+.chart-limit-line-item.dragging .chart-limit-badge {
+  cursor: grabbing;
+  transform: scale(1.05);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.9);
+}
+
+.chart-limit-drag-grip {
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: grab;
+  padding: 0 2px;
+  user-select: none;
+}
+
+.chart-limit-line-item.dragging .chart-limit-drag-grip {
+  cursor: grabbing;
+  color: #fff;
+}
+
+.chart-limit-badge-close {
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 12px;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.chart-limit-badge-close:hover {
+  color: #fff;
+  background: rgba(255, 59, 48, 0.35);
+}
+
+.chart-drag-tag {
+  background: rgba(0, 255, 163, 0.2);
+  color: #00FFA3;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .chart-limit-badge.buy {

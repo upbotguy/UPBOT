@@ -394,6 +394,34 @@ window.connectSpecificWallet = connectSpecificWallet;
 window.setQuickSlippage = setQuickSlippage;
 window.handleCustomSlippageInput = handleCustomSlippageInput;
 
+// State for Limit Line Dragging
+let isDraggingLimitLine = false;
+let draggedOrderId = null;
+
+// Bijective coordinate mapping functions between Chart Top % (10% to 90%) and Price Difference % (-50% to +200%)
+function priceDiffToTopPercent(diffPct) {
+  if (diffPct >= 0) {
+    // 0% -> 60%, +200% -> 10%
+    return Math.max(10, Math.min(60, 60 - (diffPct / 200) * 50));
+  } else {
+    // 0% -> 60%, -50% -> 90%
+    const dip = Math.abs(diffPct);
+    return Math.max(60, Math.min(90, 60 + (dip / 50) * 30));
+  }
+}
+
+function topPercentToPrice(topPct, currentPrice) {
+  const clampedTop = Math.max(10, Math.min(90, topPct));
+  let diffPct = 0;
+  if (clampedTop <= 60) {
+    diffPct = ((60 - clampedTop) / 50) * 200; // 0% to +200%
+  } else {
+    diffPct = -((clampedTop - 60) / 30) * 50; // 0% to -50%
+  }
+  const targetPrice = Math.max(0.00000001, currentPrice * (1 + diffPct / 100));
+  return { targetPrice, diffPct };
+}
+
 // Limit Order Live Lines Overlay on Chart & Target Strip
 function renderChartLimitLines() {
   const overlay = document.getElementById('limitLinesOverlay');
@@ -401,6 +429,8 @@ function renderChartLimitLines() {
   const stripItems = document.getElementById('activeOrderStripItems');
 
   if (!overlay || !currentTokenData || currentTokenData.priceUsd <= 0) return;
+  // If user is actively dragging a line, do not disrupt the DOM nodes under their pointer
+  if (isDraggingLimitLine) return;
 
   const currentPrice = currentTokenData.priceUsd;
   const pendingOrders = activeLimitOrders.filter(
@@ -429,42 +459,136 @@ function renderChartLimitLines() {
     strip.classList.add('hidden');
   }
 
-  // Render on-chart lines with accurate vertical coordinates
+  // Render on-chart lines with accurate vertical coordinates & drag grip
   let html = '';
   pendingOrders.forEach((o) => {
     const isBuy = o.order_type === 'BUY_LIMIT';
     const targetPrice = o.target_price_usd;
     const diffPct = ((targetPrice - currentPrice) / currentPrice) * 100;
-
-    // Calculate vertical position (top %) relative to chart price regions
-    // For Dip Buy / Stop Loss (below current market price):
-    // Position lines comfortably in the lower region (70% - 90% top)
-    // For Take Profit / Gain (above current market price):
-    // Position lines comfortably in the upper region (15% - 55% top)
-    let topPercent = 65;
-    if (diffPct < 0) {
-      const dip = Math.abs(diffPct);
-      topPercent = 68 + Math.min(22, (dip / 30) * 20);
-    } else {
-      topPercent = 56 - Math.min(42, (diffPct / 100) * 35);
-    }
-    topPercent = Math.max(12, Math.min(90, topPercent));
+    const topPercent = priceDiffToTopPercent(diffPct);
 
     const priceStr = targetPrice < 0.01 ? targetPrice.toFixed(6) : targetPrice.toFixed(4);
     const amountStr = isBuy ? `${o.amount_sol} SOL` : `${o.amount_percent}%`;
     const diffLabel = `${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(1)}%`;
 
     html += `
-      <div class="chart-limit-line-item ${isBuy ? 'buy' : 'sell'}" style="top: ${topPercent.toFixed(1)}%;">
-        <div class="chart-limit-badge ${isBuy ? 'buy' : 'sell'}">
-          <span>${isBuy ? '🟢 BUY DIP' : '🔴 SELL TP'} @ $${priceStr} (${diffLabel} • ${amountStr})</span>
-          <span class="chart-limit-badge-close" onclick="cancelOrder(${o.id})" title="Cancel Order">✕</span>
+      <div class="chart-limit-line-item ${isBuy ? 'buy' : 'sell'}" data-order-id="${o.id}" style="top: ${topPercent.toFixed(1)}%;">
+        <div class="chart-limit-badge ${isBuy ? 'buy' : 'sell'}" title="Drag up/down on chart to move order price">
+          <span class="chart-limit-drag-grip" title="Drag to adjust price">⋮⋮</span>
+          <span class="chart-limit-badge-text">${isBuy ? '🟢 BUY DIP' : '🔴 SELL TP'} @ $${priceStr} (${diffLabel} • ${amountStr})</span>
+          <span class="chart-limit-badge-close" onclick="event.stopPropagation(); cancelOrder(${o.id})" title="Cancel Order">✕</span>
         </div>
       </div>
     `;
   });
 
   overlay.innerHTML = html;
+  attachChartLineDragListeners();
+}
+
+// Drag & Drop limit order lines directly on TradingView Chart
+function attachChartLineDragListeners() {
+  const overlay = document.getElementById('limitLinesOverlay');
+  const chartContainer = document.getElementById('chartContainer');
+  if (!overlay || !chartContainer) return;
+
+  const lineItems = overlay.querySelectorAll('.chart-limit-line-item');
+  lineItems.forEach((lineItem) => {
+    const startDrag = (e) => {
+      // If clicked on close button (✕), let cancelOrder handle it
+      if (e.target.closest('.chart-limit-badge-close')) return;
+
+      const orderId = parseInt(lineItem.dataset.orderId, 10);
+      const order = activeLimitOrders.find((o) => o.id === orderId);
+      if (!order || !currentTokenData || currentTokenData.priceUsd <= 0) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      isDraggingLimitLine = true;
+      draggedOrderId = orderId;
+
+      lineItem.classList.add('dragging');
+      chartContainer.classList.add('is-dragging-order');
+
+      const isBuy = order.order_type === 'BUY_LIMIT';
+      const amountStr = isBuy ? `${order.amount_sol} SOL` : `${order.amount_percent}%`;
+      const currentPrice = currentTokenData.priceUsd;
+
+      let latestTopPct = parseFloat(lineItem.style.top) || 50;
+
+      const onMove = (moveEvt) => {
+        if (!isDraggingLimitLine) return;
+        const clientY = moveEvt.touches ? moveEvt.touches[0].clientY : moveEvt.clientY;
+        const rect = chartContainer.getBoundingClientRect();
+        let topPct = ((clientY - rect.top) / rect.height) * 100;
+        topPct = Math.max(10, Math.min(90, topPct));
+        latestTopPct = topPct;
+
+        lineItem.style.top = `${topPct.toFixed(1)}%`;
+
+        const { targetPrice: newPrice, diffPct: newDiff } = topPercentToPrice(topPct, currentPrice);
+        const newPriceStr = newPrice < 0.01 ? newPrice.toFixed(6) : newPrice.toFixed(4);
+        const newDiffLabel = `${newDiff >= 0 ? '+' : ''}${newDiff.toFixed(1)}%`;
+
+        const badgeText = lineItem.querySelector('.chart-limit-badge-text');
+        if (badgeText) {
+          badgeText.innerHTML = `${isBuy ? '🟢 BUY DIP' : '🔴 SELL TP'} @ $${newPriceStr} (${newDiffLabel} • ${amountStr}) <span class="chart-drag-tag">✨ RELEASE TO SAVE</span>`;
+        }
+      };
+
+      const onEnd = async (endEvt) => {
+        if (!isDraggingLimitLine) return;
+        isDraggingLimitLine = false;
+        draggedOrderId = null;
+
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onEnd);
+        document.removeEventListener('touchmove', onMove);
+        document.removeEventListener('touchend', onEnd);
+
+        chartContainer.classList.remove('is-dragging-order');
+        lineItem.classList.remove('dragging');
+
+        const { targetPrice: finalPrice, diffPct: finalDiff } = topPercentToPrice(latestTopPct, currentPrice);
+        const finalPriceStr = finalPrice < 0.01 ? finalPrice.toFixed(6) : finalPrice.toFixed(4);
+        const finalDiffLabel = `${finalDiff >= 0 ? '+' : ''}${finalDiff.toFixed(1)}%`;
+        const condition = isBuy ? 'LTE' : (finalPrice >= currentPrice ? 'GTE' : 'LTE');
+
+        showToast(`Updating order #${order.id} target to $${finalPriceStr} (${finalDiffLabel})...`, 'info');
+
+        try {
+          const res = await safeFetchJson(`/api/orders/update/${order.id}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              targetPriceUsd: finalPrice,
+              condition: condition,
+            }),
+          });
+
+          if (res && res.success) {
+            showToast(`🎯 Order #${order.id} moved to $${finalPriceStr} (${finalDiffLabel})!`, 'success');
+            await loadOrders();
+          } else {
+            showToast(res?.error || 'Failed to update order target', 'error');
+            renderChartLimitLines();
+          }
+        } catch (err) {
+          showToast('Failed to update order target: ' + err.message, 'error');
+          renderChartLimitLines();
+        }
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onEnd);
+      document.addEventListener('touchmove', onMove, { passive: false });
+      document.addEventListener('touchend', onEnd);
+    };
+
+    lineItem.addEventListener('mousedown', startDrag);
+    lineItem.addEventListener('touchstart', startDrag, { passive: false });
+  });
 }
 
 // Update Target Price Difference Meter
