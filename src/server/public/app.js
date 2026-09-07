@@ -429,26 +429,36 @@ function renderChartLimitLines() {
     strip.classList.add('hidden');
   }
 
-  // Render on-chart lines
+  // Render on-chart lines with accurate vertical coordinates
   let html = '';
-  pendingOrders.forEach((o, idx) => {
+  pendingOrders.forEach((o) => {
     const isBuy = o.order_type === 'BUY_LIMIT';
     const targetPrice = o.target_price_usd;
     const diffPct = ((targetPrice - currentPrice) / currentPrice) * 100;
 
-    // Calculate vertical position (top %) relative to chart center (50%)
-    // -20% dip -> ~70% top; +20% pump -> ~30% top
-    let topPercent = 50 - (diffPct * 1.5);
-    topPercent = Math.max(12, Math.min(88, topPercent));
+    // Calculate vertical position (top %) relative to chart price regions
+    // For Dip Buy / Stop Loss (below current market price):
+    // Position lines comfortably in the lower region (70% - 90% top)
+    // For Take Profit / Gain (above current market price):
+    // Position lines comfortably in the upper region (15% - 55% top)
+    let topPercent = 65;
+    if (diffPct < 0) {
+      const dip = Math.abs(diffPct);
+      topPercent = 68 + Math.min(22, (dip / 30) * 20);
+    } else {
+      topPercent = 56 - Math.min(42, (diffPct / 100) * 35);
+    }
+    topPercent = Math.max(12, Math.min(90, topPercent));
 
     const priceStr = targetPrice < 0.01 ? targetPrice.toFixed(6) : targetPrice.toFixed(4);
     const amountStr = isBuy ? `${o.amount_sol} SOL` : `${o.amount_percent}%`;
+    const diffLabel = `${diffPct >= 0 ? '+' : ''}${diffPct.toFixed(1)}%`;
 
     html += `
-      <div class="chart-limit-line-item ${isBuy ? 'buy' : 'sell'}" style="top: ${topPercent}%;">
+      <div class="chart-limit-line-item ${isBuy ? 'buy' : 'sell'}" style="top: ${topPercent.toFixed(1)}%;">
         <div class="chart-limit-badge ${isBuy ? 'buy' : 'sell'}">
-          <span>${isBuy ? '🟢 BUY LIMIT' : '🔴 SELL LIMIT'} @ $${priceStr} (${amountStr})</span>
-          <span style="cursor:pointer;color:#888;" onclick="cancelOrder(${o.id})">✕</span>
+          <span>${isBuy ? '🟢 BUY DIP' : '🔴 SELL TP'} @ $${priceStr} (${diffLabel} • ${amountStr})</span>
+          <span class="chart-limit-badge-close" onclick="cancelOrder(${o.id})" title="Cancel Order">✕</span>
         </div>
       </div>
     `;
@@ -868,17 +878,60 @@ function setupEventListeners() {
 
   document.getElementById('customSellPercent')?.addEventListener('input', updateSellEstValue);
 
-  // Limit Target Price Inputs Real-time preview
-  document.getElementById('limitBuyTargetPrice')?.addEventListener('input', updateLimitDiffPreview);
-  document.getElementById('limitSellTargetPrice')?.addEventListener('input', updateLimitDiffPreview);
+  // Limit Target Price Inputs Real-time preview & two-way custom % sync
+  document.getElementById('limitBuyTargetPrice')?.addEventListener('input', () => {
+    if (currentTokenData && currentTokenData.priceUsd > 0) {
+      const curPrice = currentTokenData.priceUsd;
+      const target = parseFloat(document.getElementById('limitBuyTargetPrice').value) || 0;
+      if (target > 0) {
+        const dip = ((curPrice - target) / curPrice) * 100;
+        const customDipInp = document.getElementById('customDipPercentInput');
+        if (customDipInp) customDipInp.value = dip > 0 ? dip.toFixed(1) : 0;
+      }
+    }
+    updateLimitDiffPreview();
+  });
 
-  // Limit Presets: Dip
+  document.getElementById('limitSellTargetPrice')?.addEventListener('input', () => {
+    if (currentTokenData && currentTokenData.priceUsd > 0) {
+      const curPrice = currentTokenData.priceUsd;
+      const target = parseFloat(document.getElementById('limitSellTargetPrice').value) || 0;
+      if (target > 0) {
+        const pct = ((target - curPrice) / curPrice) * 100;
+        const customTpInp = document.getElementById('customTpSlPercentInput');
+        if (customTpInp) customTpInp.value = pct.toFixed(1);
+      }
+    }
+    updateLimitDiffPreview();
+  });
+
+  // Custom Dip % input
+  document.getElementById('customDipPercentInput')?.addEventListener('input', (e) => {
+    const dip = parseFloat(e.target.value);
+    if (!isNaN(dip) && currentTokenData && currentTokenData.priceUsd > 0) {
+      document.querySelectorAll('.limit-dip-preset').forEach((b) => {
+        if (parseFloat(b.dataset.dip) === dip) {
+          b.classList.add('active');
+        } else {
+          b.classList.remove('active');
+        }
+      });
+      const target = currentTokenData.priceUsd * (1 - dip / 100);
+      const el = document.getElementById('limitBuyTargetPrice');
+      if (el) el.value = target < 0.01 ? target.toFixed(6) : target.toFixed(4);
+      updateLimitDiffPreview();
+    }
+  });
+
+  // Limit Presets: Dip Chips
   document.querySelectorAll('.limit-dip-preset').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.limit-dip-preset').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
+      const dipPct = parseFloat(btn.dataset.dip);
+      const customDipInp = document.getElementById('customDipPercentInput');
+      if (customDipInp) customDipInp.value = dipPct;
       if (currentTokenData && currentTokenData.priceUsd > 0) {
-        const dipPct = parseFloat(btn.dataset.dip);
         const target = currentTokenData.priceUsd * (1 - dipPct / 100);
         const el = document.getElementById('limitBuyTargetPrice');
         if (el) el.value = target < 0.01 ? target.toFixed(6) : target.toFixed(4);
@@ -887,14 +940,47 @@ function setupEventListeners() {
     });
   });
 
-  // Limit Presets: TP/SL
+  // Limit Buy SOL Amount Presets
+  document.querySelectorAll('.limit-buy-sol-preset').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.limit-buy-sol-preset').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      const val = btn.dataset.val;
+      const el = document.getElementById('limitBuySolAmount');
+      if (el) el.value = val;
+    });
+  });
+
+  // Custom TP/SL % input
+  document.getElementById('customTpSlPercentInput')?.addEventListener('input', (e) => {
+    const pct = parseFloat(e.target.value);
+    if (!isNaN(pct) && currentTokenData && currentTokenData.priceUsd > 0) {
+      document.querySelectorAll('.limit-tpsl-preset').forEach((b) => {
+        const p = parseFloat(b.dataset.pct);
+        const cond = b.dataset.cond;
+        if ((cond === 'GTE' && p === pct) || (cond === 'LTE' && -p === pct)) {
+          b.classList.add('active');
+        } else {
+          b.classList.remove('active');
+        }
+      });
+      const target = pct >= 0 ? currentTokenData.priceUsd * (1 + pct / 100) : currentTokenData.priceUsd * (1 - Math.abs(pct) / 100);
+      const el = document.getElementById('limitSellTargetPrice');
+      if (el) el.value = target < 0.01 ? target.toFixed(6) : target.toFixed(4);
+      updateLimitDiffPreview();
+    }
+  });
+
+  // Limit Presets: TP/SL Chips
   document.querySelectorAll('.limit-tpsl-preset').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.limit-tpsl-preset').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
+      const pct = parseFloat(btn.dataset.pct);
+      const cond = btn.dataset.cond;
+      const customTpInp = document.getElementById('customTpSlPercentInput');
+      if (customTpInp) customTpInp.value = cond === 'GTE' ? pct : -pct;
       if (currentTokenData && currentTokenData.priceUsd > 0) {
-        const pct = parseFloat(btn.dataset.pct);
-        const cond = btn.dataset.cond;
         let target = currentTokenData.priceUsd;
         if (cond === 'GTE') {
           target = currentTokenData.priceUsd * (1 + pct / 100);
@@ -905,6 +991,17 @@ function setupEventListeners() {
         if (el) el.value = target < 0.01 ? target.toFixed(6) : target.toFixed(4);
         updateLimitDiffPreview();
       }
+    });
+  });
+
+  // Limit Sell Token % Presets
+  document.querySelectorAll('.limit-sell-pct-preset').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.limit-sell-pct-preset').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      const val = btn.dataset.val;
+      const el = document.getElementById('limitSellPercent');
+      if (el) el.value = val;
     });
   });
 
