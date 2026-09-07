@@ -22,37 +22,45 @@ export function getMainMenuKeyboard(lang: SupportedLanguage = 'en'): InlineKeybo
 }
 
 /**
- * Language Selection Keyboard
+ * Language Selection Keyboard with 6 languages
  */
-export function getLanguageKeyboard(): InlineKeyboard {
+export function getLanguageKeyboard(lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   return new InlineKeyboard()
     .text('🇺🇸 English', 'lang:set:en')
+    .text('🇨🇳 简体中文', 'lang:set:zh')
+    .row()
+    .text('🇷🇺 Русский', 'lang:set:ru')
+    .text('🇰🇷 한국어', 'lang:set:ko')
+    .row()
+    .text('🇪🇸 Español', 'lang:set:es')
     .text('🇲🇲 မြန်မာစာ', 'lang:set:my')
     .row()
-    .text('🔙 Main Menu', 'menu:main');
+    .text(t.btn_back_main, 'menu:main');
 }
 
 /**
  * Security & Wallet Management Keyboard
  */
 export function getSecurityKeyboard(wallets: DecryptedWallet[], lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   const kb = new InlineKeyboard();
 
   // Switch active wallet buttons
   if (wallets.length > 0) {
     wallets.forEach((w, index) => {
-      const activeMark = w.isActive ? '✅ (Active)' : '⚪';
+      const activeMark = w.isActive ? '✅' : '⚪';
       kb.text(`${activeMark} W${index + 1}: ${formatAddress(w.publicKey)}`, `wallet:select:${w.publicKey}`).row();
     });
   }
 
-  kb.text('➕ Add Wallet', 'wallet:add')
-    .text('🗑️ Remove Wallet', 'wallet:remove')
+  kb.text(t.btn_add_wallet, 'wallet:add')
+    .text(t.btn_remove_wallet, 'wallet:remove')
     .row()
-    .text('✨ Generate New Wallet', 'wallet:generate')
-    .text('🔑 Backup / Export Key', 'wallet:export_menu')
+    .text(t.btn_generate_wallet, 'wallet:generate')
+    .text(t.btn_export_key, 'wallet:export_menu')
     .row()
-    .text('🔙 Main Menu', 'menu:main');
+    .text(t.btn_back_main, 'menu:main');
 
   return kb;
 }
@@ -60,42 +68,46 @@ export function getSecurityKeyboard(wallets: DecryptedWallet[], lang: SupportedL
 /**
  * Export Wallet Selection Keyboard
  */
-export function getExportWalletKeyboard(wallets: DecryptedWallet[]): InlineKeyboard {
+export function getExportWalletKeyboard(wallets: DecryptedWallet[], lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   const kb = new InlineKeyboard();
 
   if (wallets.length === 0) {
     kb.text('❌ No wallets found', 'noop').row();
   } else {
     wallets.forEach((w, index) => {
-      kb.text(`🔑 Export W${index + 1} (${formatAddress(w.publicKey)})`, `wallet:export_confirm:${w.publicKey}`).row();
+      kb.text(`🔑 W${index + 1} (${formatAddress(w.publicKey)})`, `wallet:export_confirm:${w.publicKey}`).row();
     });
   }
 
-  kb.text('🔙 Back to Security', 'menu:security');
+  kb.text(t.btn_back_security, 'menu:security');
   return kb;
 }
 
 /**
  * Confirm Export Warning Keyboard
  */
-export function getConfirmExportKeyboard(publicKey: string): InlineKeyboard {
+export function getConfirmExportKeyboard(publicKey: string, lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   return new InlineKeyboard()
-    .text('⚠️ Yes, Show Private Key', `wallet:export_show:${publicKey}`)
+    .text(t.btn_confirm_export, `wallet:export_show:${publicKey}`)
     .row()
-    .text('❌ Cancel', 'menu:security');
+    .text(t.btn_cancel, 'menu:security');
 }
 
 /**
  * Self Destruct Private Key View Keyboard
  */
-export function getSelfDestructKeyboard(messageId: number): InlineKeyboard {
-  return new InlineKeyboard().text('🔒 Hide & Delete Immediately', `wallet:hide:${messageId}`);
+export function getSelfDestructKeyboard(messageId: number, lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
+  return new InlineKeyboard().text(t.btn_hide_key, `wallet:hide:${messageId}`);
 }
 
 /**
  * Remove Wallet Keyboard
  */
-export function getRemoveWalletKeyboard(wallets: DecryptedWallet[]): InlineKeyboard {
+export function getRemoveWalletKeyboard(wallets: DecryptedWallet[], lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   const kb = new InlineKeyboard();
 
   if (wallets.length === 0) {
@@ -106,14 +118,15 @@ export function getRemoveWalletKeyboard(wallets: DecryptedWallet[]): InlineKeybo
     });
   }
 
-  kb.text('🔙 Back to Security', 'menu:security');
+  kb.text(t.btn_back_security, 'menu:security');
   return kb;
 }
 
 /**
  * Token Trading Dashboard Keyboard
  */
-export function getTokenTradeKeyboard(tokenAddress: string, dexUrl?: string): InlineKeyboard {
+export function getTokenTradeKeyboard(tokenAddress: string, dexUrl?: string, lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   const kb = new InlineKeyboard()
     // Buy presets
     .text('🟢 Buy 0.5 SOL', 'buy:preset:0.5')
@@ -121,7 +134,7 @@ export function getTokenTradeKeyboard(tokenAddress: string, dexUrl?: string): In
     .text('🟢 Buy 2.0 SOL', 'buy:preset:2.0')
     .row()
     .text('🟢 Buy 5.0 SOL', 'buy:preset:5.0')
-    .text('✏️ Custom Buy', 'buy:custom')
+    .text(t.btn_buy_custom, 'buy:custom')
     .row()
     // Sell presets
     .text('🔴 Sell 10%', 'sell:preset:10')
@@ -130,51 +143,57 @@ export function getTokenTradeKeyboard(tokenAddress: string, dexUrl?: string): In
     .row()
     .text('🔴 Sell 75%', 'sell:preset:75')
     .text('🔴 Sell 100%', 'sell:preset:100')
-    .text('✏️ Custom Sell', 'sell:custom')
+    .text(t.btn_sell_custom, 'sell:custom')
     .row()
     // Limit Orders row
-    .text('⏱️ Limit Buy (Dip)', 'limit:buy:menu')
-    .text('⏱️ Limit Sell (TP/SL)', 'limit:sell:menu')
+    .text(t.btn_limit_buy, 'limit:buy:menu')
+    .text(t.btn_limit_sell, 'limit:sell:menu')
     .row()
-    .text('🔄 Refresh', 'token:refresh');
+    .text('🖼️ Share PnL Card', `token:pnl:${tokenAddress}`)
+    .text(t.btn_refresh, 'token:refresh');
 
   if (dexUrl) {
     kb.url('📊 DexScreener', dexUrl);
   }
 
-  kb.row().text('🔙 Main Menu', 'menu:main');
+  kb.row().text(t.btn_back_main, 'menu:main');
   return kb;
 }
 
 /**
- * Limit Buy Options Keyboard
+ * Limit Buy Options Keyboard (with Presets, Custom Dip %, and Custom Price)
  */
-export function getLimitBuyOptionsKeyboard(tokenAddress: string, currentPriceUsd: number): InlineKeyboard {
+export function getLimitBuyOptionsKeyboard(tokenAddress: string, currentPriceUsd: number, lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   const p5 = currentPriceUsd * 0.95;
   const p10 = currentPriceUsd * 0.9;
+  const p15 = currentPriceUsd * 0.85;
   const p20 = currentPriceUsd * 0.8;
 
   const fmt = (n: number) => (n < 0.01 ? n.toFixed(6) : n.toFixed(4));
 
   return new InlineKeyboard()
     .text(`🟢 -5% Dip ($${fmt(p5)})`, 'limit:buy:preset:5')
-    .row()
     .text(`🟢 -10% Dip ($${fmt(p10)})`, 'limit:buy:preset:10')
     .row()
+    .text(`🟢 -15% Dip ($${fmt(p15)})`, 'limit:buy:preset:15')
     .text(`🟢 -20% Dip ($${fmt(p20)})`, 'limit:buy:preset:20')
     .row()
-    .text('✏️ Custom Target Price / Dip', 'limit:buy:custom')
+    .text(t.btn_custom_dip_pct, 'limit:buy:custom_dip')
+    .text(t.btn_custom_price, 'limit:buy:custom_price')
     .row()
-    .text('🔙 Back to Token', 'token:refresh');
+    .text(t.btn_trade_dashboard, 'token:refresh');
 }
 
 /**
- * Limit Sell Options Keyboard (TP / SL)
+ * Limit Sell Options Keyboard (with Presets, Custom TP/SL %, and Custom Price)
  */
-export function getLimitSellOptionsKeyboard(tokenAddress: string, currentPriceUsd: number): InlineKeyboard {
+export function getLimitSellOptionsKeyboard(tokenAddress: string, currentPriceUsd: number, lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   const p25 = currentPriceUsd * 1.25;
   const p50 = currentPriceUsd * 1.5;
   const p100 = currentPriceUsd * 2.0;
+  const sl15 = currentPriceUsd * 0.85;
 
   const fmt = (n: number) => (n < 0.01 ? n.toFixed(6) : n.toFixed(4));
 
@@ -183,17 +202,19 @@ export function getLimitSellOptionsKeyboard(tokenAddress: string, currentPriceUs
     .text(`🚀 +50% TP ($${fmt(p50)})`, 'limit:sell:preset:50:GTE')
     .row()
     .text(`🚀 +100% (2x) ($${fmt(p100)})`, 'limit:sell:preset:100:GTE')
-    .text('🛑 -15% Stop Loss', 'limit:sell:preset:15:LTE')
+    .text(`🛑 -15% SL ($${fmt(sl15)})`, 'limit:sell:preset:15:LTE')
     .row()
-    .text('✏️ Custom TP / SL Price', 'limit:sell:custom')
+    .text(t.btn_custom_tpsl_pct, 'limit:sell:custom_pct')
+    .text(t.btn_custom_price, 'limit:sell:custom_price')
     .row()
-    .text('🔙 Back to Token', 'token:refresh');
+    .text(t.btn_trade_dashboard, 'token:refresh');
 }
 
 /**
  * Active Orders List Keyboard
  */
-export function getOrdersKeyboard(orders: DBLimitOrder[]): InlineKeyboard {
+export function getOrdersKeyboard(orders: DBLimitOrder[], lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   const kb = new InlineKeyboard();
   const pendingOrders = orders.filter((o) => o.status === 'PENDING');
 
@@ -202,46 +223,48 @@ export function getOrdersKeyboard(orders: DBLimitOrder[]): InlineKeyboard {
       const typeStr = o.order_type === 'BUY_LIMIT' ? '🟢 Buy' : '🔴 Sell';
       const amountStr = o.order_type === 'BUY_LIMIT' ? `${o.amount_sol} SOL` : `${o.amount_percent}%`;
       kb.text(`🔍 #${o.id} $${o.token_symbol} (${typeStr} ${amountStr})`, `order:view:${o.id}`)
-        .text('❌ Cancel', `orders:cancel:${o.id}`)
+        .text(t.btn_cancel, `orders:cancel:${o.id}`)
         .row();
     });
   }
 
-  kb.text('🔄 Refresh Orders', 'menu:orders').row().text('🔙 Main Menu', 'menu:main');
+  kb.text(t.btn_refresh, 'menu:orders').row().text(t.btn_back_main, 'menu:main');
   return kb;
 }
 
 /**
  * Single Order Detail & Action Keyboard
  */
-export function getOrderDetailKeyboard(order: DBLimitOrder): InlineKeyboard {
+export function getOrderDetailKeyboard(order: DBLimitOrder, lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   return new InlineKeyboard()
-    .text('✏️ Edit Target Price', `order:edit:price:${order.id}`)
-    .text('✏️ Edit Amount', `order:edit:amount:${order.id}`)
+    .text(t.btn_edit_price, `order:edit:price:${order.id}`)
+    .text(t.btn_edit_amount, `order:edit:amount:${order.id}`)
     .row()
-    .text('🗑️ Cancel / Delete Order', `orders:cancel:${order.id}`)
+    .text(t.btn_cancel_order, `orders:cancel:${order.id}`)
     .row()
-    .text('🎯 Trade Token', `token:refresh:${order.token_address}`)
-    .text('📋 All Orders', 'menu:orders')
+    .text(t.btn_trade_dashboard, `token:refresh:${order.token_address}`)
+    .text(t.btn_back_orders, 'menu:orders')
     .row()
-    .text('🔙 Main Menu', 'menu:main');
+    .text(t.btn_back_main, 'menu:main');
 }
 
 /**
  * Portfolio Keyboard
  */
-export function getPortfolioKeyboard(portfolio: WalletPortfolio): InlineKeyboard {
+export function getPortfolioKeyboard(portfolio: WalletPortfolio, lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   const kb = new InlineKeyboard();
 
   if (portfolio.tokens.length > 0) {
-    portfolio.tokens.slice(0, 8).forEach((t) => {
-      kb.text(`🎯 Trade $${t.symbol}`, `token:refresh:${t.mint}`).row();
+    portfolio.tokens.slice(0, 8).forEach((tItem) => {
+      kb.text(t.portfolio_trade_btn(tItem.symbol), `token:refresh:${tItem.mint}`).row();
     });
   }
 
-  kb.text('🔄 Refresh Portfolio', 'menu:portfolio')
+  kb.text(t.btn_refresh, 'menu:portfolio')
     .row()
-    .text('🔙 Main Menu', 'menu:main');
+    .text(t.btn_back_main, 'menu:main');
   return kb;
 }
 
@@ -249,19 +272,21 @@ export function getPortfolioKeyboard(portfolio: WalletPortfolio): InlineKeyboard
  * Settings Keyboard
  */
 export function getSettingsKeyboard(settings: DBSettings, lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   return new InlineKeyboard()
-    .text(`⚡ Slippage: ${settings.slippage_bps / 100}%`, 'settings:slippage_menu')
-    .text(`⛽ Priority Fee: ${settings.priority_fee_sol} SOL`, 'settings:priority_menu')
+    .text(t.btn_slippage(settings.slippage_bps / 100), 'settings:slippage_menu')
+    .text(t.btn_priority_fee(settings.priority_fee_sol), 'settings:priority_menu')
     .row()
-    .text('🌐 Language / ဘာသာစကား', 'menu:language')
+    .text(t.btn_language, 'menu:language')
     .row()
-    .text('🔙 Main Menu', 'menu:main');
+    .text(t.btn_back_main, 'menu:main');
 }
 
 /**
  * Slippage Presets Keyboard
  */
-export function getSlippageSettingsKeyboard(currentBps: number): InlineKeyboard {
+export function getSlippageSettingsKeyboard(currentBps: number, lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   const is1 = currentBps === 100 ? '✅ 1%' : '1%';
   const is3 = currentBps === 300 ? '✅ 3%' : '3%';
   const is5 = currentBps === 500 ? '✅ 5% (Default)' : '5%';
@@ -273,15 +298,16 @@ export function getSlippageSettingsKeyboard(currentBps: number): InlineKeyboard 
     .text(is5, 'settings:set_slippage:500')
     .row()
     .text(is10, 'settings:set_slippage:1000')
-    .text('✏️ Custom %', 'settings:custom_slippage')
+    .text(t.btn_custom_slippage, 'settings:custom_slippage')
     .row()
-    .text('🔙 Back to Settings', 'menu:settings');
+    .text(t.btn_back_main, 'menu:settings');
 }
 
 /**
  * Priority Fee Presets Keyboard
  */
-export function getPriorityFeeKeyboard(currentFee: number): InlineKeyboard {
+export function getPriorityFeeKeyboard(currentFee: number, lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
   const isLow = currentFee === 0.0005 ? '✅ Standard (0.0005)' : 'Standard (0.0005)';
   const isHigh = currentFee === 0.001 ? '✅ High (0.001)' : 'High (0.001)';
   const isTurbo = currentFee === 0.002 ? '✅ Turbo (0.002)' : 'Turbo (0.002)';
@@ -293,5 +319,5 @@ export function getPriorityFeeKeyboard(currentFee: number): InlineKeyboard {
     .row()
     .text(isTurbo, 'settings:set_fee:0.002')
     .row()
-    .text('🔙 Back to Settings', 'menu:settings');
+    .text(t.btn_back_main, 'menu:settings');
 }

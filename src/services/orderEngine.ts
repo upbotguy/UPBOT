@@ -2,27 +2,33 @@ import { Bot, InlineKeyboard } from 'grammy';
 import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 import {
   getPendingLimitOrders,
+  claimLimitOrderForExecution,
   updateLimitOrderStatus,
   getWalletByPublicKey,
   getUserSettings,
+  getUserLanguage,
   DBLimitOrder,
+  recordTrade,
 } from '../db/index.js';
-import { fetchTokenInfo, formatCurrency } from './token.js';
+import { fetchLiveTokenPrices, formatCurrency } from './token.js';
 import { importWalletAuto, getTokenBalance, getSolBalance, formatAddress } from './wallet.js';
 import { getJupiterQuote, executeJupiterSwap } from './swap.js';
 import { CONFIG } from '../config.js';
 import { MyContext } from './../bot/conversations.js';
+import { getT } from '../i18n/index.js';
 
 let isEngineRunning = false;
+let isProcessing = false;
 let pollingInterval: NodeJS.Timeout | null = null;
+const inFlightOrderIds = new Set<number>();
 
 /**
  * Start the background Limit Order Engine
  */
-export function startOrderEngine(bot: Bot<MyContext>, intervalMs = CONFIG.ORDER_POLL_INTERVAL_MS || 2000) {
+export function startOrderEngine(bot: Bot<MyContext>, intervalMs = CONFIG.ORDER_POLL_INTERVAL_MS || 300) {
   if (isEngineRunning) return;
   isEngineRunning = true;
-  console.log(`⚡ Limit Order Engine started (Polling every ${(intervalMs / 1000).toFixed(1)}s)...`);
+  console.log(`⚡ Limit Order Engine started (Polling every ${(intervalMs / 1000).toFixed(2)}s / ${intervalMs}ms)...`);
 
   pollingInterval = setInterval(async () => {
     try {
@@ -42,6 +48,7 @@ export function stopOrderEngine() {
     pollingInterval = null;
   }
   isEngineRunning = false;
+  inFlightOrderIds.clear();
   console.log('🛑 Limit Order Engine stopped.');
 }
 
@@ -49,48 +56,58 @@ export function stopOrderEngine() {
  * Process all pending limit orders
  */
 async function processPendingOrders(bot: Bot<MyContext>) {
-  const pendingOrders = getPendingLimitOrders();
-  if (pendingOrders.length === 0) return;
+  if (isProcessing) return;
+  isProcessing = true;
 
-  // Group by token address to minimize API calls
-  const tokenAddresses = Array.from(new Set(pendingOrders.map((o) => o.token_address)));
-  const tokenPriceMap = new Map<string, number>();
+  try {
+    const pendingOrders = getPendingLimitOrders();
+    if (pendingOrders.length === 0) return;
 
-  for (const ca of tokenAddresses) {
-    try {
-      const info = await fetchTokenInfo(ca);
-      if (info && info.priceUsd > 0) {
-        tokenPriceMap.set(ca, info.priceUsd);
+    // Filter out orders currently in flight
+    const actionableOrders = pendingOrders.filter((o) => !inFlightOrderIds.has(o.id));
+    if (actionableOrders.length === 0) return;
+
+    // Group by token address to batch live price requests
+    const tokenAddresses = Array.from(new Set(actionableOrders.map((o) => o.token_address)));
+    const tokenPriceMap = await fetchLiveTokenPrices(tokenAddresses);
+
+    for (const order of actionableOrders) {
+      if (inFlightOrderIds.has(order.id)) continue;
+      const currentPrice = tokenPriceMap.get(order.token_address);
+      if (!currentPrice || currentPrice <= 0) continue;
+
+      let isTriggered = false;
+
+      if (order.order_type === 'BUY_LIMIT') {
+        if (order.condition === 'LTE' && currentPrice <= order.target_price_usd) {
+          isTriggered = true;
+        }
+      } else if (order.order_type === 'SELL_LIMIT') {
+        if (order.condition === 'GTE' && currentPrice >= order.target_price_usd) {
+          isTriggered = true;
+        } else if (order.condition === 'LTE' && currentPrice <= order.target_price_usd) {
+          isTriggered = true;
+        }
       }
-    } catch (e) {
-      console.error(`Failed to fetch price for token ${ca}:`, e);
-    }
-  }
 
-  for (const order of pendingOrders) {
-    const currentPrice = tokenPriceMap.get(order.token_address);
-    if (!currentPrice) continue;
+      if (isTriggered) {
+        // Atomic DB claim to prevent any race condition or duplicate firing
+        const claimed = claimLimitOrderForExecution(order.id);
+        if (!claimed) {
+          continue;
+        }
 
-    let isTriggered = false;
+        inFlightOrderIds.add(order.id);
+        console.log(`🎯 Order #${order.id} CLAIMED & TRIGGERED! (${order.order_type} for ${order.token_symbol} at Live $${currentPrice} vs Target $${order.target_price_usd})`);
 
-    if (order.order_type === 'BUY_LIMIT') {
-      // Buy Limit triggers when current price falls to or below target price
-      if (order.condition === 'LTE' && currentPrice <= order.target_price_usd) {
-        isTriggered = true;
-      }
-    } else if (order.order_type === 'SELL_LIMIT') {
-      // Take Profit (GTE) or Stop Loss (LTE)
-      if (order.condition === 'GTE' && currentPrice >= order.target_price_usd) {
-        isTriggered = true;
-      } else if (order.condition === 'LTE' && currentPrice <= order.target_price_usd) {
-        isTriggered = true;
+        // Execute asynchronously and clean up in-flight set when done
+        executeTriggeredOrder(bot, order, currentPrice).finally(() => {
+          inFlightOrderIds.delete(order.id);
+        });
       }
     }
-
-    if (isTriggered) {
-      console.log(`🎯 Order #${order.id} TRIGGERED! (${order.order_type} for ${order.token_symbol} at $${currentPrice})`);
-      await executeTriggeredOrder(bot, order, currentPrice);
-    }
+  } finally {
+    isProcessing = false;
   }
 }
 
@@ -98,8 +115,8 @@ async function processPendingOrders(bot: Bot<MyContext>) {
  * Execute a triggered limit order
  */
 async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, triggerPrice: number) {
-  // Mark status as EXECUTING to prevent double-firing
-  updateLimitOrderStatus(order.id, 'EXECUTING');
+  const lang = getUserLanguage(order.user_id);
+  const t = getT(lang);
 
   const wallet = getWalletByPublicKey(order.user_id, order.wallet_address);
   if (!wallet) {
@@ -107,13 +124,13 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
     await notifyUser(
       bot,
       order.user_id,
-      `❌ *Limit Order #${order.id} Failed!*\n\nWallet \`${formatAddress(order.wallet_address)}\` ရှာမတွေ့တော့ပါ။`
+      `❌ *Limit Order #${order.id} Failed!*\n\nWallet \`${formatAddress(order.wallet_address)}\` not found.`
     );
     return;
   }
 
   const settings = getUserSettings(order.user_id);
-  const slippageBps = settings.slippage_bps || 500; // default 5%
+  const slippageBps = settings.slippage_bps || 500;
   const priorityFeeLamports = Math.floor((settings.priority_fee_sol || 0.001) * LAMPORTS_PER_SOL);
 
   try {
@@ -131,7 +148,7 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
           `❌ *Limit Buy Order #${order.id} Failed!*\n\n` +
             `🪙 *Token:* \`${order.token_symbol}\`\n` +
             `💵 *Trigger Price:* \`${formatCurrency(triggerPrice)}\`\n` +
-            `⚠️ *အကြောင်းအရင်း:* လက်ကျန် SOL မလုံလောက်ပါ (လိုအပ်: \`${solAmount} SOL\`, လက်ကျန်: \`${solBalance.toFixed(4)} SOL\`)`
+            `⚠️ ${t.insufficient_sol_err(solAmount, solBalance)}`
         );
         return;
       }
@@ -144,7 +161,7 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
         await notifyUser(
           bot,
           order.user_id,
-          `❌ *Limit Buy Order #${order.id} Failed!*\n\nJupiter Swap Quote ရယူ၍ မရရှိပါ (Liquidity မလုံလောက်ပါ)။`
+          `❌ *Limit Buy Order #${order.id} Failed!*\n\nJupiter Swap Quote unavailable (insufficient liquidity).`
         );
         return;
       }
@@ -158,10 +175,23 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
         updateLimitOrderStatus(order.id, 'EXECUTED', swapResult.signature);
         const outEstimate = (parseInt(quote.outAmount) / 1e6).toFixed(2);
 
+        // Record trade for PnL & entry tracking
+        recordTrade({
+          userId: order.user_id,
+          walletAddress: wallet.publicKey,
+          tokenAddress: order.token_address,
+          tokenSymbol: order.token_symbol,
+          tradeType: 'BUY',
+          amountSol: solAmount,
+          tokenAmount: parseFloat(outEstimate) || (parseInt(quote.outAmount) / 1e6),
+          priceUsd: triggerPrice,
+          txSignature: swapResult.signature,
+        });
+
         await notifyUser(
           bot,
           order.user_id,
-          `🎉 *Limit Buy Order Executed အောင်မြင်ပါသည်!* 🚀\n\n` +
+          `🎉 *Limit Buy Order #${order.id} Executed!* 🚀\n\n` +
             `🪙 *Token:* *$${order.token_symbol}*\n` +
             `💵 *Execution Price:* \`${formatCurrency(triggerPrice)}\` (Target: \`${formatCurrency(order.target_price_usd)}\`)\n` +
             `💰 *Spent:* \`${solAmount} SOL\`\n` +
@@ -169,9 +199,10 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
             `💳 *Wallet:* \`${formatAddress(wallet.publicKey)}\`\n\n` +
             `🔗 *Solscan:* [View Transaction](https://solscan.io/tx/${swapResult.signature})`,
           new InlineKeyboard()
-            .url('🔍 View on Solscan', `https://solscan.io/tx/${swapResult.signature}`)
+            .url(t.btn_view_solscan, `https://solscan.io/tx/${swapResult.signature}`)
             .row()
-            .text('🎯 Trade Dashboard', `token:refresh:${order.token_address}`)
+            .text('🖼️ Share PnL Card', `token:pnl:${order.token_address}`)
+            .text(t.btn_trade_dashboard, `token:refresh:${order.token_address}`)
         );
       } else {
         updateLimitOrderStatus(order.id, 'FAILED', undefined, swapResult.error);
@@ -193,7 +224,7 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
           order.user_id,
           `❌ *Limit Sell Order #${order.id} Failed!*\n\n` +
             `🪙 *Token:* \`${order.token_symbol}\`\n` +
-            `⚠️ *အကြောင်းအရင်း:* ရောင်းချရန် Token Balance မရှိတော့ပါ။`
+            `⚠️ ${t.insufficient_token_err(order.token_symbol)}`
         );
         return;
       }
@@ -211,7 +242,7 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
         await notifyUser(
           bot,
           order.user_id,
-          `❌ *Limit Sell Order #${order.id} Failed!*\n\nJupiter Swap Quote ရယူ၍ မရရှိပါ။`
+          `❌ *Limit Sell Order #${order.id} Failed!*\n\nJupiter Swap Quote unavailable.`
         );
         return;
       }
@@ -224,21 +255,36 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
       if (swapResult.success && swapResult.signature) {
         updateLimitOrderStatus(order.id, 'EXECUTED', swapResult.signature);
         const outSol = (parseInt(quote.outAmount) / LAMPORTS_PER_SOL).toFixed(4);
+        const soldAmountTokens = tokenBal.uiAmount * (percent / 100);
+
+        // Record trade for PnL & entry tracking
+        recordTrade({
+          userId: order.user_id,
+          walletAddress: wallet.publicKey,
+          tokenAddress: order.token_address,
+          tokenSymbol: order.token_symbol,
+          tradeType: 'SELL',
+          amountSol: parseFloat(outSol) || 0,
+          tokenAmount: soldAmountTokens,
+          priceUsd: triggerPrice,
+          txSignature: swapResult.signature,
+        });
 
         await notifyUser(
           bot,
           order.user_id,
-          `🎉 *Limit Sell Order Executed အောင်မြင်ပါသည်!* 🚀\n\n` +
+          `🎉 *Limit Sell Order #${order.id} Executed!* 🚀\n\n` +
             `🪙 *Token:* *$${order.token_symbol}*\n` +
             `💵 *Execution Price:* \`${formatCurrency(triggerPrice)}\`\n` +
-            `📦 *Sold:* \`${percent}%\` (~${(tokenBal.uiAmount * (percent / 100)).toFixed(2)} tokens)\n` +
+            `📦 *Sold:* \`${percent}%\` (~${soldAmountTokens.toFixed(2)} tokens)\n` +
             `💰 *Received:* ~\`${outSol} SOL\`\n` +
             `💳 *Wallet:* \`${formatAddress(wallet.publicKey)}\`\n\n` +
             `🔗 *Solscan:* [View Transaction](https://solscan.io/tx/${swapResult.signature})`,
           new InlineKeyboard()
-            .url('🔍 View on Solscan', `https://solscan.io/tx/${swapResult.signature}`)
+            .url(t.btn_view_solscan, `https://solscan.io/tx/${swapResult.signature}`)
             .row()
-            .text('🎯 Trade Dashboard', `token:refresh:${order.token_address}`)
+            .text('🖼️ Share PnL Card', `token:pnl:${order.token_address}`)
+            .text(t.btn_trade_dashboard, `token:refresh:${order.token_address}`)
         );
       } else {
         updateLimitOrderStatus(order.id, 'FAILED', undefined, swapResult.error);

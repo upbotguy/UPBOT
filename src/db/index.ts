@@ -2,12 +2,14 @@ import Database from 'better-sqlite3';
 import { CONFIG } from '../config.js';
 import { encryptText, decryptText } from '../services/crypto.js';
 
+export type SupportedLanguage = 'en' | 'zh' | 'ru' | 'ko' | 'es' | 'my';
+
 export interface DBUser {
   telegram_id: number;
   username: string | null;
   first_name: string | null;
   active_token?: string | null;
-  language?: 'en' | 'my';
+  language?: SupportedLanguage;
   created_at: string;
 }
 
@@ -120,6 +122,22 @@ export function initDB() {
       executed_at DATETIME,
       FOREIGN KEY (user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      wallet_address TEXT NOT NULL,
+      token_address TEXT NOT NULL,
+      token_symbol TEXT NOT NULL,
+      trade_type TEXT NOT NULL,
+      amount_sol REAL NOT NULL,
+      token_amount REAL NOT NULL,
+      price_usd REAL NOT NULL,
+      market_cap_usd REAL DEFAULT 0,
+      tx_signature TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+    );
   `);
 
   // Ensure active_token and language columns exist if table was created earlier
@@ -159,16 +177,20 @@ export function getOrCreateUser(telegramId: number, username?: string, firstName
   return user;
 }
 
-export function getUserLanguage(userId: number): 'en' | 'my' {
+export function getUserLanguage(userId: number): SupportedLanguage {
   try {
     const user = getOrCreateUser(userId);
-    return user.language === 'my' ? 'my' : 'en';
+    const validLangs: SupportedLanguage[] = ['en', 'zh', 'ru', 'ko', 'es', 'my'];
+    if (user.language && validLangs.includes(user.language as SupportedLanguage)) {
+      return user.language as SupportedLanguage;
+    }
+    return 'en';
   } catch {
     return 'en';
   }
 }
 
-export function setUserLanguage(userId: number, lang: 'en' | 'my'): void {
+export function setUserLanguage(userId: number, lang: SupportedLanguage): void {
   try {
     getOrCreateUser(userId);
     db.prepare('UPDATE users SET language = ? WHERE telegram_id = ?').run(lang, userId);
@@ -448,6 +470,20 @@ export function cancelLimitOrder(userId: number, orderId: number): boolean {
   return result.changes > 0;
 }
 
+/**
+ * Atomically claim a pending order for execution.
+ * Returns true if this process successfully claimed the order, false if already claimed/executed/cancelled.
+ */
+export function claimLimitOrderForExecution(orderId: number): boolean {
+  const stmt = db.prepare(`
+    UPDATE limit_orders
+    SET status = 'EXECUTING'
+    WHERE id = ? AND status = 'PENDING'
+  `);
+  const result = stmt.run(orderId);
+  return result.changes > 0;
+}
+
 export function updateLimitOrderStatus(
   orderId: number,
   status: 'PENDING' | 'EXECUTING' | 'EXECUTED' | 'CANCELLED' | 'FAILED',
@@ -460,4 +496,158 @@ export function updateLimitOrderStatus(
     SET status = ?, tx_signature = ?, error_message = ?, executed_at = ?
     WHERE id = ?
   `).run(status, txSignature || null, errorMessage || null, now, orderId);
+}
+
+export interface DBTrade {
+  id: number;
+  user_id: number;
+  wallet_address: string;
+  token_address: string;
+  token_symbol: string;
+  trade_type: 'BUY' | 'SELL';
+  amount_sol: number;
+  token_amount: number;
+  price_usd: number;
+  market_cap_usd: number;
+  tx_signature: string | null;
+  created_at: string;
+}
+
+export interface UserTokenPosition {
+  tokenAddress: string;
+  tokenSymbol: string;
+  totalBoughtTokens: number;
+  totalSoldTokens: number;
+  currentHoldingTokens: number;
+  totalSpentUsd: number;
+  totalSpentSol: number;
+  totalSoldUsd: number;
+  totalSoldSol: number;
+  avgEntryPriceUsd: number;
+  avgEntryMarketCap: number;
+}
+
+/**
+ * Record a completed trade for PnL & position tracking
+ */
+export function recordTrade(trade: {
+  userId: number;
+  walletAddress: string;
+  tokenAddress: string;
+  tokenSymbol: string;
+  tradeType: 'BUY' | 'SELL';
+  amountSol: number;
+  tokenAmount: number;
+  priceUsd: number;
+  marketCapUsd?: number;
+  txSignature?: string;
+}): void {
+  const stmt = db.prepare(`
+    INSERT INTO trades (user_id, wallet_address, token_address, token_symbol, trade_type, amount_sol, token_amount, price_usd, market_cap_usd, tx_signature)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run(
+    trade.userId,
+    trade.walletAddress,
+    trade.tokenAddress,
+    trade.tokenSymbol,
+    trade.tradeType,
+    trade.amountSol,
+    trade.tokenAmount,
+    trade.priceUsd,
+    trade.marketCapUsd || 0,
+    trade.txSignature || null
+  );
+}
+
+/**
+ * Get aggregated position & average entry for a user and token
+ */
+export function getUserTokenPosition(userId: number, tokenAddress: string, walletAddress?: string): UserTokenPosition | null {
+  let query = `SELECT * FROM trades WHERE user_id = ? AND token_address = ?`;
+  const params: any[] = [userId, tokenAddress];
+  if (walletAddress) {
+    query += ` AND wallet_address = ?`;
+    params.push(walletAddress);
+  }
+  query += ` ORDER BY id ASC`;
+
+  const stmt = db.prepare(query);
+  const rows = stmt.all(...params) as DBTrade[];
+  if (rows.length === 0) return null;
+
+  let totalBoughtTokens = 0;
+  let totalSoldTokens = 0;
+  let totalSpentUsd = 0;
+  let totalSpentSol = 0;
+  let totalSoldUsd = 0;
+  let totalSoldSol = 0;
+  let weightedMarketCapSum = 0;
+
+  for (const row of rows) {
+    if (row.trade_type === 'BUY') {
+      totalBoughtTokens += row.token_amount;
+      totalSpentUsd += row.token_amount * row.price_usd;
+      totalSpentSol += row.amount_sol;
+      weightedMarketCapSum += (row.market_cap_usd || 0) * row.token_amount;
+    } else if (row.trade_type === 'SELL') {
+      totalSoldTokens += row.token_amount;
+      totalSoldUsd += row.token_amount * row.price_usd;
+      totalSoldSol += row.amount_sol;
+    }
+  }
+
+  const currentHoldingTokens = Math.max(0, totalBoughtTokens - totalSoldTokens);
+  const avgEntryPriceUsd = totalBoughtTokens > 0 ? totalSpentUsd / totalBoughtTokens : 0;
+  const avgEntryMarketCap = totalBoughtTokens > 0 ? weightedMarketCapSum / totalBoughtTokens : 0;
+
+  return {
+    tokenAddress,
+    tokenSymbol: rows[0].token_symbol,
+    totalBoughtTokens,
+    totalSoldTokens,
+    currentHoldingTokens,
+    totalSpentUsd,
+    totalSpentSol,
+    totalSoldUsd,
+    totalSoldSol,
+    avgEntryPriceUsd,
+    avgEntryMarketCap,
+  };
+}
+
+/**
+ * Get or initialize default user for Web UI (prioritizes Telegram user with active wallet)
+ */
+export function getDefaultUserId(): number {
+  // 1. Check if any active wallet exists and return its owner Telegram user_id
+  const activeWalletUser = db.prepare('SELECT user_id FROM wallets WHERE is_active = 1 ORDER BY id DESC LIMIT 1').get() as { user_id: number } | undefined;
+  if (activeWalletUser) return activeWalletUser.user_id;
+
+  // 2. Check if any wallet exists at all
+  const anyWalletUser = db.prepare('SELECT user_id FROM wallets ORDER BY id DESC LIMIT 1').get() as { user_id: number } | undefined;
+  if (anyWalletUser) return anyWalletUser.user_id;
+
+  // 3. Check for real Telegram users in users table
+  const realUser = db.prepare('SELECT telegram_id FROM users WHERE telegram_id != 1 ORDER BY created_at DESC LIMIT 1').get() as { telegram_id: number } | undefined;
+  if (realUser) return realUser.telegram_id;
+
+  const anyUser = db.prepare('SELECT telegram_id FROM users ORDER BY created_at ASC LIMIT 1').get() as { telegram_id: number } | undefined;
+  if (anyUser) return anyUser.telegram_id;
+
+  getOrCreateUser(1, 'LocalUser', 'Trader');
+  return 1;
+}
+
+/**
+ * Get recent trade history for a user
+ */
+export function getUserRecentTrades(userId: number, limit = 30): DBTrade[] {
+  const stmt = db.prepare(`
+    SELECT * FROM trades
+    WHERE user_id = ?
+    ORDER BY id DESC
+    LIMIT ?
+  `);
+  return stmt.all(userId, limit) as DBTrade[];
 }

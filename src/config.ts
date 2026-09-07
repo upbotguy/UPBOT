@@ -21,5 +21,8 @@ export const CONFIG = {
   WSOL_MINT: 'So11111111111111111111111111111111111111112',
   JUPITER_QUOTE_API: 'https://api.jup.ag/swap/v1/quote',
   JUPITER_SWAP_API: 'https://api.jup.ag/swap/v1/swap',
-  ORDER_POLL_INTERVAL_MS: parseInt(process.env.ORDER_POLL_INTERVAL_MS || '2000', 10),
+  ORDER_POLL_INTERVAL_MS: parseInt(process.env.ORDER_POLL_INTERVAL_MS || '300', 10),
+  PORT: parseInt(process.env.PORT || '3000', 10),
+  ENABLE_WEB_UI: process.env.ENABLE_WEB_UI !== 'false',
+  BOT_USERNAME: (process.env.BOT_USERNAME || '').replace(/^@/, '').trim(),
 };

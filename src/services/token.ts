@@ -61,16 +61,35 @@ export async function fetchTokenInfo(tokenAddress: string, forceRefresh = false)
       .filter((p: any) => p.chainId === 'solana')
       .sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
 
-    const pair = solanaPairs.length > 0 ? solanaPairs[0] : response.data.pairs[0];
+    let pair = solanaPairs.length > 0 ? solanaPairs[0] : response.data.pairs[0];
+
+    // For Native/Wrapped SOL, find pair against USDC or USDT with highest liquidity
+    if (trimmed.toLowerCase() === 'so11111111111111111111111111111111111111112') {
+      const solUsdcPair = solanaPairs.find(
+        (p: any) =>
+          (p.baseToken?.address?.toLowerCase() === trimmed.toLowerCase() &&
+            ['usdc', 'usdt'].includes((p.quoteToken?.symbol || '').toLowerCase())) ||
+          (p.quoteToken?.address?.toLowerCase() === trimmed.toLowerCase() &&
+            ['usdc', 'usdt'].includes((p.baseToken?.symbol || '').toLowerCase()))
+      );
+      if (solUsdcPair) {
+        pair = solUsdcPair;
+      }
+    }
 
     const isBaseToken = pair.baseToken?.address?.toLowerCase() === trimmed.toLowerCase();
     const tokenMeta = isBaseToken ? pair.baseToken : pair.quoteToken;
 
+    let priceUsd = parseFloat(pair.priceUsd || '0');
+    if (!isBaseToken && parseFloat(pair.priceNative || '0') > 0) {
+      priceUsd = parseFloat(pair.priceUsd || '1') / parseFloat(pair.priceNative || '1');
+    }
+
     const tokenInfo: TokenInfo = {
       address: trimmed,
-      name: tokenMeta.name || 'Unknown',
-      symbol: tokenMeta.symbol || 'UNKNOWN',
-      priceUsd: parseFloat(pair.priceUsd || '0'),
+      name: tokenMeta.name || (trimmed.toLowerCase() === 'so11111111111111111111111111111111111111112' ? 'Solana' : 'Unknown'),
+      symbol: tokenMeta.symbol || (trimmed.toLowerCase() === 'so11111111111111111111111111111111111111112' ? 'SOL' : 'UNKNOWN'),
+      priceUsd,
       priceNative: parseFloat(pair.priceNative || '0'),
       marketCap: pair.marketCap || pair.fdv || 0,
       fdv: pair.fdv || 0,
@@ -133,6 +152,68 @@ async function fetchOnChainTokenInfo(tokenAddress: string): Promise<TokenInfo | 
   } catch {
     return null;
   }
+}
+
+/**
+ * Fetch high-speed real-time token prices using Jupiter Price API (v2 / v6) with DexScreener fallback.
+ * Returns a Map of tokenAddress -> priceUsd.
+ */
+export async function fetchLiveTokenPrices(tokenAddresses: string[]): Promise<Map<string, number>> {
+  const priceMap = new Map<string, number>();
+  if (tokenAddresses.length === 0) return priceMap;
+
+  const uniqueAddrs = Array.from(new Set(tokenAddresses.map((a) => a.trim())));
+
+  // 1. Try Jupiter Price API v2 (ultra-fast sub-second real-time routing price)
+  try {
+    const ids = uniqueAddrs.join(',');
+    const jupRes = await axios.get(`https://api.jup.ag/price/v2?ids=${ids}`, { timeout: 3000 });
+    if (jupRes.data && jupRes.data.data) {
+      for (const addr of uniqueAddrs) {
+        const item = jupRes.data.data[addr];
+        if (item && item.price) {
+          const p = parseFloat(item.price);
+          if (!isNaN(p) && p > 0) {
+            priceMap.set(addr, p);
+          }
+        }
+      }
+    }
+  } catch (jupErr: any) {
+    // Fallback: Try Jupiter v6 price API
+    try {
+      const ids = uniqueAddrs.join(',');
+      const jupV6Res = await axios.get(`https://price.jup.ag/v6/price?ids=${ids}`, { timeout: 3000 });
+      if (jupV6Res.data && jupV6Res.data.data) {
+        for (const addr of uniqueAddrs) {
+          const item = jupV6Res.data.data[addr];
+          if (item && item.price) {
+            const p = typeof item.price === 'number' ? item.price : parseFloat(item.price);
+            if (!isNaN(p) && p > 0) {
+              priceMap.set(addr, p);
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 2. For any tokens not found on Jupiter (e.g. brand new pump tokens), query DexScreener
+  const missingAddrs = uniqueAddrs.filter((a) => !priceMap.has(a));
+  if (missingAddrs.length > 0) {
+    await Promise.all(
+      missingAddrs.map(async (addr) => {
+        try {
+          const info = await fetchTokenInfo(addr, true);
+          if (info && info.priceUsd > 0) {
+            priceMap.set(addr, info.priceUsd);
+          }
+        } catch {}
+      })
+    );
+  }
+
+  return priceMap;
 }
 
 /**

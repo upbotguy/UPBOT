@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UPBOT AI • Solana Trading Terminal</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/@solana/web3.js@1.95.8/lib/index.iife.min.js"></script>
+</head>
+<body>
+  <!-- Top Navigation -->
+  <header class="navbar">
+    <div class="nav-left">
+      <div class="logo-box">
+        <img src="logo.png" alt="UPBOT AI Logo" class="brand-logo-img" />
+        <div class="logo-title">
+          <span class="brand-name">UPBOT AI</span>
+          <span class="brand-sub">SOLANA TRADING TERMINAL</span>
+        </div>
+      </div>
+      <div class="live-pill">
+        <span class="pulse-dot"></span>
+        <span>LIVE TERMINAL</span>
+      </div>
+    </div>
+
+    <div class="nav-center">
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="tokenInput" placeholder="Paste Solana Token Address (CA)..." autocomplete="off" onkeydown="if(event.key==='Enter')handleLoadTokenClick()" />
+        <button id="btnLoadToken" class="btn-primary-sm" onclick="handleLoadTokenClick()">Load Token</button>
+      </div>
+    </div>
+
+    <div class="nav-right">
+      <!-- Wallet Mode Selector -->
+      <div class="wallet-mode-tabs">
+        <button id="btnModeBotWallet" class="mode-tab-btn active" title="Telegram / Server Wallet (Supports 24/7 Limit Orders)">🤖 Bot Wallet</button>
+        <button id="btnModeExtension" class="mode-tab-btn" title="Phantom / Solflare Extension (Direct In-Browser Trading)">👻 Extension</button>
+      </div>
+
+      <!-- Bot Wallet Badge -->
+      <div class="wallet-badge" id="walletBadge">
+        <span class="wallet-icon">🤖</span>
+        <div class="wallet-info">
+          <span id="activeWalletAddress">Loading...</span>
+          <span id="activeWalletBalance" class="sol-bal">0.0000 SOL</span>
+        </div>
+        <button id="btnSwitchWallet" class="btn-icon" title="Switch / Manage Wallets">🔄</button>
+      </div>
+
+      <!-- Browser Extension Wallet Box -->
+      <div class="extension-box hidden" id="extensionBox">
+        <button id="btnConnectExt" class="btn-connect-ext" onclick="openWalletModal()">🔌 Connect Extension</button>
+        <div class="wallet-badge ext-active hidden" id="extConnectedBadge">
+          <span class="wallet-icon">👻</span>
+          <div class="wallet-info">
+            <span id="extAddressDisplay">Not connected</span>
+            <span id="extBalanceDisplay" class="sol-bal">0.0000 SOL</span>
+          </div>
+          <button id="btnDisconnectExt" class="btn-icon" title="Disconnect Extension">❌</button>
+        </div>
+      </div>
+
+      <button id="btnSettings" class="btn-secondary-sm">⚙️ Settings</button>
+      <button id="btnTgBotLink" class="btn-tg" onclick="handleTgBotClick()">🤖 TG Bot</button>
+    </div>
+  </header>
+
+  <!-- Quick Favorites / Watchlist Bar -->
+  <div class="watchlist-bar">
+    <div class="watchlist-label">⭐ WATCHLIST:</div>
+    <div class="watchlist-items" id="watchlistItems">
+      <!-- Generated Fav Coin Chips -->
+    </div>
+    <button id="btnFavCurrentToken" class="btn-fav-toggle" onclick="toggleCurrentFavorite()" title="Add or remove active coin to favorites">⭐ Star Coin</button>
+    <button id="btnAddCustomFav" class="btn-fav-add" onclick="promptAddFavorite()" title="Add any token by Contract Address">➕ Add</button>
+  </div>
+
+  <!-- Main Trading Workspace Grid -->
+  <main class="terminal-container">
+    <!-- Left Column: Chart & Token Stats -->
+    <section class="chart-panel">
+      <!-- Token Header Banner -->
+      <div class="token-header-card" id="tokenHeaderCard">
+        <div class="token-main-info">
+          <div class="token-name-group">
+            <div class="symbol-fav-row">
+              <h1 id="tokenSymbol">$SOL</h1>
+              <button id="btnStarTokenHeader" class="btn-star-header" onclick="toggleCurrentFavorite()" title="Favorite this token">⭐</button>
+            </div>
+            <span id="tokenName" class="token-full-name">Wrapped SOL</span>
+            <span id="tokenDex" class="dex-pill">Raydium</span>
+          </div>
+          <div class="token-price-group">
+            <div id="tokenPriceUsd" class="token-price">$0.00</div>
+            <div id="tokenPriceChange24h" class="price-change-badge">0.00%</div>
+          </div>
+        </div>
+
+        <div class="token-quick-stats">
+          <div class="stat-item">
+            <span class="stat-label">Market Cap</span>
+            <span id="tokenMarketCap" class="stat-val">$0</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Liquidity</span>
+            <span id="tokenLiquidity" class="stat-val">$0</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">24h Volume</span>
+            <span id="tokenVolume24h" class="stat-val">$0</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">5m / 1h</span>
+            <span id="tokenShortChanges" class="stat-val">0% / 0%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- User Position & PnL Strip (Visible if holding) -->
+      <div class="position-banner hidden" id="positionBanner">
+        <div class="pos-col">
+          <span class="pos-label">HOLDING</span>
+          <span id="posHolding" class="pos-val">0 Tokens</span>
+        </div>
+        <div class="pos-col">
+          <span class="pos-label">AVG ENTRY PRICE</span>
+          <span id="posEntryPrice" class="pos-val">$0.00</span>
+        </div>
+        <div class="pos-col">
+          <span class="pos-label">ENTRY MCAP</span>
+          <span id="posEntryMc" class="pos-val">$0</span>
+        </div>
+        <div class="pos-col">
+          <span class="pos-label">CURRENT PNL</span>
+          <span id="posPnl" class="pos-pnl-val">0.00%</span>
+        </div>
+        <div class="pos-action">
+          <button id="btnSharePnl" class="btn-share-pnl">🖼️ PnL Card</button>
+        </div>
+      </div>
+
+      <!-- Active Limit Order Visual Target Strip -->
+      <div class="active-orders-strip hidden" id="activeOrdersStrip">
+        <div class="strip-header">🎯 ACTIVE LIMIT TARGETS ON CHART:</div>
+        <div class="strip-items" id="activeOrderStripItems"></div>
+      </div>
+
+      <!-- Chart Frame Container with Visual Target Lines Layer -->
+      <div class="chart-container" id="chartContainer">
+        <iframe id="dexChartFrame" src="https://dexscreener.com/solana/So11111111111111111111111111111111111111112?embed=1&theme=dark&trades=0&info=0"></iframe>
+        
+        <!-- Live Visual Limit Order Price Lines Overlay -->
+        <div class="limit-lines-overlay" id="limitLinesOverlay"></div>
+      </div>
+    </section>
+
+    <!-- Right Column: Trading Console -->
+    <section class="trade-panel">
+      <!-- Trade Tabs (Instant vs Limit) -->
+      <div class="trade-tabs">
+        <button class="trade-tab active" data-tab="swap">⚡ Instant Swap</button>
+        <button class="trade-tab" data-tab="limit">⏱️ Limit Orders</button>
+      </div>
+
+      <!-- Instant Swap Form -->
+      <div class="trade-content active" id="tabSwap">
+        <div class="swap-toggle">
+          <button id="btnModeBuy" class="mode-btn active buy">🟢 Buy</button>
+          <button id="btnModeSell" class="mode-btn sell">🔴 Sell</button>
+        </div>
+
+        <!-- Slippage Tolerance Quick Selector Bar -->
+        <div class="slippage-control-bar">
+          <div class="slippage-label">
+            <span>⚡ Slippage Tolerance:</span>
+            <strong id="activeSlippageDisplay" class="active-slip-val">5.0%</strong>
+          </div>
+          <div class="slippage-presets">
+            <button class="slip-chip-btn" data-slip="100" onclick="setQuickSlippage(100)">1.0%</button>
+            <button class="slip-chip-btn" data-slip="200" onclick="setQuickSlippage(200)">2.0%</button>
+            <button class="slip-chip-btn active" data-slip="500" onclick="setQuickSlippage(500)">5.0%</button>
+            <button class="slip-chip-btn" data-slip="1000" onclick="setQuickSlippage(1000)">10.0%</button>
+            <button class="slip-chip-btn" data-slip="2000" onclick="setQuickSlippage(2000)">20.0%</button>
+            <div class="slip-custom-mini" title="Enter custom slippage %">
+              <input type="number" id="quickCustomSlippage" placeholder="Custom" step="0.1" min="0.1" max="100" value="5.0" oninput="handleCustomSlippageInput(this.value)" />
+              <span class="slip-pct-sign">%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- BUY SECTION -->
+        <div id="buySection" class="trade-section">
+          <label class="input-label">Select SOL Amount</label>
+          <div class="preset-grid">
+            <button class="preset-btn buy-preset" data-val="0.1">0.1 SOL</button>
+            <button class="preset-btn buy-preset active" data-val="0.5">0.5 SOL</button>
+            <button class="preset-btn buy-preset" data-val="1.0">1.0 SOL</button>
+            <button class="preset-btn buy-preset" data-val="2.0">2.0 SOL</button>
+            <button class="preset-btn buy-preset" data-val="5.0">5.0 SOL</button>
+          </div>
+
+          <div class="custom-input-group">
+            <span class="input-prefix">SOL</span>
+            <input type="number" id="customBuyAmount" placeholder="Custom SOL Amount" step="0.01" value="0.5" />
+          </div>
+
+          <div class="trade-meta">
+            <span>Available: <strong id="buyAvailSol">0.0000 SOL</strong></span>
+            <span>Est. Slippage: <strong id="swapSlippageText">5.0%</strong></span>
+          </div>
+
+          <button id="btnExecuteBuy" class="btn-execute buy">🟢 Instant Buy</button>
+        </div>
+
+        <!-- SELL SECTION -->
+        <div id="sellSection" class="trade-section hidden">
+          <label class="input-label">Select Token % to Sell</label>
+          <div class="preset-grid">
+            <button class="preset-btn sell-preset" data-val="10">10%</button>
+            <button class="preset-btn sell-preset" data-val="25">25%</button>
+            <button class="preset-btn sell-preset" data-val="50">50%</button>
+            <button class="preset-btn sell-preset" data-val="75">75%</button>
+            <button class="preset-btn sell-preset active" data-val="100">100%</button>
+          </div>
+
+          <div class="custom-input-group">
+            <span class="input-prefix">%</span>
+            <input type="number" id="customSellPercent" placeholder="Custom %" min="1" max="100" value="100" />
+          </div>
+
+          <div class="trade-meta">
+            <span>Token Balance: <strong id="sellAvailTokens">0 Tokens</strong></span>
+            <span>Est. Value: <strong id="sellEstValUsd">$0.00</strong></span>
+          </div>
+
+          <button id="btnExecuteSell" class="btn-execute sell">🔴 Instant Sell</button>
+        </div>
+      </div>
+
+      <!-- Limit Orders Form -->
+      <div class="trade-content hidden" id="tabLimit">
+        <!-- Extension Mode Hint for Limit Orders -->
+        <div id="limitExtNotice" class="limit-ext-banner hidden">
+          <span>⚡ <strong>24/7 Automated Engine:</strong> Limit orders execute continuously in the background via your <strong>Bot Wallet</strong> even when your browser is closed.</span>
+          <button id="btnSwitchToBotForLimit" class="btn-xs-pill">Use Bot Wallet</button>
+        </div>
+
+        <div class="limit-type-select">
+          <button id="btnLimitBuyType" class="mode-btn active buy">🟢 Limit Buy (Dip)</button>
+          <button id="btnLimitSellType" class="mode-btn sell">🔴 Limit Sell (TP/SL)</button>
+        </div>
+
+        <!-- Live Target Price Preview & Diff Meter -->
+        <div class="target-diff-box" id="targetDiffBox">
+          <div class="diff-step">
+            <span class="diff-lbl">Current Price</span>
+            <span id="diffCurrentPrice" class="diff-val">$0.00</span>
+          </div>
+          <div class="diff-arrow">➔</div>
+          <div class="diff-step">
+            <span class="diff-lbl">Order Trigger</span>
+            <span id="diffTargetPrice" class="diff-val target-accent">$0.00</span>
+          </div>
+          <div class="diff-badge" id="diffBadge">-10.0% Dip</div>
+        </div>
+
+        <!-- LIMIT BUY FORM -->
+        <div id="limitBuySection" class="trade-section">
+          <label class="input-label">Dip Target Preset</label>
+          <div class="preset-grid">
+            <button class="preset-btn limit-dip-preset" data-dip="5">-5% Dip</button>
+            <button class="preset-btn limit-dip-preset active" data-dip="10">-10% Dip</button>
+            <button class="preset-btn limit-dip-preset" data-dip="15">-15% Dip</button>
+            <button class="preset-btn limit-dip-preset" data-dip="20">-20% Dip</button>
+          </div>
+
+          <div class="custom-input-group">
+            <span class="input-prefix">Target $</span>
+            <input type="number" id="limitBuyTargetPrice" placeholder="Target Price USD" step="0.000001" />
+          </div>
+
+          <div class="custom-input-group">
+            <span class="input-prefix">Buy SOL</span>
+            <input type="number" id="limitBuySolAmount" placeholder="Amount SOL" step="0.01" value="0.5" />
+          </div>
+
+          <button id="btnCreateLimitBuy" class="btn-execute buy">🎯 Place Limit Buy Order</button>
+        </div>
+
+        <!-- LIMIT SELL FORM -->
+        <div id="limitSellSection" class="trade-section hidden">
+          <label class="input-label">TP / SL Preset</label>
+          <div class="preset-grid">
+            <button class="preset-btn limit-tpsl-preset active" data-pct="25" data-cond="GTE">+25% TP</button>
+            <button class="preset-btn limit-tpsl-preset" data-pct="50" data-cond="GTE">+50% TP</button>
+            <button class="preset-btn limit-tpsl-preset" data-pct="100" data-cond="GTE">+100% (2x)</button>
+            <button class="preset-btn limit-tpsl-preset" data-pct="15" data-cond="LTE">-15% SL</button>
+          </div>
+
+          <div class="custom-input-group">
+            <span class="input-prefix">Target $</span>
+            <input type="number" id="limitSellTargetPrice" placeholder="Target Price USD" step="0.000001" />
+          </div>
+
+          <div class="custom-input-group">
+            <span class="input-prefix">Sell %</span>
+            <input type="number" id="limitSellPercent" placeholder="Sell %" min="1" max="100" value="100" />
+          </div>
+
+          <button id="btnCreateLimitSell" class="btn-execute sell">🎯 Place Limit Sell Order</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Bottom Workspace Panels (Portfolio, Orders, History) -->
+  <section class="bottom-panel">
+    <div class="bottom-tabs">
+      <button class="bottom-tab active" data-btab="portfolio">💼 Portfolio Holdings (<span id="countHoldings">0</span>)</button>
+      <button class="bottom-tab" data-btab="orders">⏱️ Active Limit Orders (<span id="countOrders">0</span>)</button>
+      <button class="bottom-tab" data-btab="history">📜 Trade History</button>
+      <button class="bottom-tab" data-btab="wallets">💳 Manage Wallets</button>
+    </div>
+
+    <!-- Tab 1: Portfolio Holdings -->
+    <div class="bottom-content active" id="btabPortfolio">
+      <table class="terminal-table">
+        <thead>
+          <tr>
+            <th>Token</th>
+            <th>Balance</th>
+            <th>Live Price</th>
+            <th>Total Value ($)</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="portfolioTableBody">
+          <tr><td colspan="5" class="empty-msg">Loading portfolio holdings...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Tab 2: Limit Orders -->
+    <div class="bottom-content hidden" id="btabOrders">
+      <table class="terminal-table">
+        <thead>
+          <tr>
+            <th># ID</th>
+            <th>Type</th>
+            <th>Token</th>
+            <th>Target Price</th>
+            <th>Amount</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="ordersTableBody">
+          <tr><td colspan="8" class="empty-msg">No active limit orders.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Tab 3: Trade History -->
+    <div class="bottom-content hidden" id="btabHistory">
+      <table class="terminal-table">
+        <thead>
+          <tr>
+            <th># ID</th>
+            <th>Type</th>
+            <th>Token</th>
+            <th>Price USD</th>
+            <th>Amount SOL</th>
+            <th>Token Amount</th>
+            <th>Date</th>
+            <th>Solscan</th>
+          </tr>
+        </thead>
+        <tbody id="historyTableBody">
+          <tr><td colspan="8" class="empty-msg">No recent trade history.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Tab 4: Wallets Manager -->
+    <div class="bottom-content hidden" id="btabWallets">
+      <div class="wallet-manager-header">
+        <button id="btnCreateNewWallet" class="btn-primary-sm">➕ Create New Wallet</button>
+        <button id="btnImportWalletModal" class="btn-secondary-sm">🔑 Import Private Key</button>
+      </div>
+      <table class="terminal-table">
+        <thead>
+          <tr>
+            <th>Wallet Address</th>
+            <th>SOL Balance</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="walletsTableBody">
+          <tr><td colspan="4" class="empty-msg">Loading wallets...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Modals (Wallet Selection, Settings, PnL Preview, Wallet Import, Status Toast) -->
+  <div id="walletModal" class="modal-backdrop hidden">
+    <div class="modal-card wallet-modal-card">
+      <div class="modal-header">
+        <h2>🔌 Connect Solana Wallet</h2>
+        <button class="modal-close" onclick="closeWalletModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-subtitle">Select your Solana browser wallet extension to connect:</p>
+        <div class="wallet-options-grid">
+          <button class="wallet-opt-card" onclick="connectSpecificWallet('phantom')">
+            <div class="wallet-opt-icon">👻</div>
+            <div class="wallet-opt-details">
+              <span class="wallet-opt-name">Phantom</span>
+              <span class="wallet-opt-desc">Fast & secure Solana wallet</span>
+            </div>
+            <span class="wallet-opt-badge" id="badgePhantom">Detecting...</span>
+          </button>
+          <button class="wallet-opt-card" onclick="connectSpecificWallet('solflare')">
+            <div class="wallet-opt-icon">☀️</div>
+            <div class="wallet-opt-details">
+              <span class="wallet-opt-name">Solflare</span>
+              <span class="wallet-opt-desc">Secure Solana web & extension wallet</span>
+            </div>
+            <span class="wallet-opt-badge" id="badgeSolflare">Detecting...</span>
+          </button>
+          <button class="wallet-opt-card" onclick="connectSpecificWallet('backpack')">
+            <div class="wallet-opt-icon">🎒</div>
+            <div class="wallet-opt-details">
+              <span class="wallet-opt-name">Backpack</span>
+              <span class="wallet-opt-desc">Next-gen xNFT & Solana wallet</span>
+            </div>
+            <span class="wallet-opt-badge" id="badgeBackpack">Detecting...</span>
+          </button>
+          <button class="wallet-opt-card auto-opt" onclick="connectSpecificWallet('auto')">
+            <div class="wallet-opt-icon">⚡</div>
+            <div class="wallet-opt-details">
+              <span class="wallet-opt-name">Auto-Detect Any Wallet</span>
+              <span class="wallet-opt-desc">Automatically detect installed extension</span>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsModal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>⚙️ Trading Settings</h2>
+        <button class="modal-close" id="btnCloseSettings">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label class="input-label">Slippage Tolerance (%)</label>
+        <div class="preset-grid">
+          <button class="preset-btn slip-preset" data-slip="100">1.0%</button>
+          <button class="preset-btn slip-preset" data-slip="200">2.0%</button>
+          <button class="preset-btn slip-preset active" data-slip="500">5.0%</button>
+          <button class="preset-btn slip-preset" data-slip="1000">10.0%</button>
+        </div>
+        <div class="custom-input-group">
+          <span class="input-prefix">%</span>
+          <input type="number" id="settingCustomSlippage" placeholder="Custom %" value="5.0" />
+        </div>
+
+        <label class="input-label" style="margin-top:16px;">Priority Gas Fee (SOL)</label>
+        <div class="custom-input-group">
+          <span class="input-prefix">SOL</span>
+          <input type="number" id="settingPriorityFee" placeholder="Priority Fee (SOL)" step="0.0005" value="0.001" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnSaveSettings" class="btn-execute buy">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

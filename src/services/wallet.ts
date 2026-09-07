@@ -4,7 +4,7 @@ import bs58 from 'bs58';
 import * as bip39 from 'bip39';
 import { derivePath } from 'ed25519-hd-key';
 import { CONFIG } from '../config.js';
-import { fetchTokenInfo } from './token.js';
+import { fetchTokenInfo, fetchLiveTokenPrices, TokenInfo } from './token.js';
 
 export const connection = new Connection(CONFIG.SOLANA_RPC_URL, 'confirmed');
 
@@ -210,7 +210,10 @@ export interface WalletPortfolio {
   solValueUsd: number;
   tokens: PortfolioItem[];
   totalValueUsd: number;
+  walletAddress?: string;
 }
+
+const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
 /**
  * Fetch complete token holdings / portfolio for a wallet address
@@ -226,24 +229,57 @@ export async function getWalletPortfolio(walletAddress: string): Promise<WalletP
   const solValueUsd = solBalance * solPriceUsd;
 
   try {
-    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
-      programId: TOKEN_PROGRAM_ID,
-    });
+    // Query both legacy SPL Token Program and modern Token-2022 Program in parallel
+    const [standardRes, token2022Res] = await Promise.allSettled([
+      connection.getParsedTokenAccountsByOwner(pubkey, {
+        programId: TOKEN_PROGRAM_ID,
+      }),
+      connection.getParsedTokenAccountsByOwner(pubkey, {
+        programId: TOKEN_2022_PROGRAM_ID,
+      }),
+    ]);
 
-    const nonZeroAccounts = tokenAccounts.value.filter((a) => {
-      const amount = a.account.data.parsed.info.tokenAmount.uiAmount;
+    const allAccounts: any[] = [];
+    if (standardRes.status === 'fulfilled' && standardRes.value?.value) {
+      allAccounts.push(...standardRes.value.value);
+    }
+    if (token2022Res.status === 'fulfilled' && token2022Res.value?.value) {
+      allAccounts.push(...token2022Res.value.value);
+    }
+
+    const nonZeroAccounts = allAccounts.filter((a) => {
+      const amount = a.account.data.parsed?.info?.tokenAmount?.uiAmount;
       return amount && amount > 0;
     });
+
+    if (nonZeroAccounts.length === 0) {
+      return {
+        solBalance,
+        solPriceUsd,
+        solValueUsd,
+        tokens: [],
+        totalValueUsd: solValueUsd,
+        walletAddress,
+      };
+    }
+
+    // Batch query live prices for all held tokens via Jupiter / DexScreener
+    const mintList = nonZeroAccounts.map((a) => a.account.data.parsed.info.mint as string);
+    const livePrices = await fetchLiveTokenPrices(mintList);
 
     const tokenPromises = nonZeroAccounts.map(async (acc) => {
       const parsedInfo = acc.account.data.parsed.info;
       const mint = parsedInfo.mint as string;
-      const uiAmount = parsedInfo.tokenAmount.uiAmount as number;
-      const tokenInfo = await fetchTokenInfo(mint).catch(() => null);
+      const uiAmount = (parsedInfo.tokenAmount.uiAmount as number) || 0;
+      
+      let tokenInfo: TokenInfo | null = null;
+      try {
+        tokenInfo = await fetchTokenInfo(mint);
+      } catch {}
 
-      const symbol = tokenInfo?.symbol || formatAddress(mint, 3);
-      const name = tokenInfo?.name || symbol;
-      const priceUsd = tokenInfo?.priceUsd || 0;
+      const symbol = tokenInfo?.symbol && tokenInfo.symbol !== 'UNKNOWN' ? tokenInfo.symbol : mint.slice(0, 4).toUpperCase();
+      const name = tokenInfo?.name && tokenInfo.name !== 'Unknown' ? tokenInfo.name : symbol;
+      const priceUsd = livePrices.get(mint) || tokenInfo?.priceUsd || 0;
       const valueUsd = uiAmount * priceUsd;
 
       return {
@@ -268,6 +304,7 @@ export async function getWalletPortfolio(walletAddress: string): Promise<WalletP
       solValueUsd,
       tokens,
       totalValueUsd,
+      walletAddress,
     };
   } catch (error) {
     console.error('Error fetching wallet portfolio:', error);
@@ -277,6 +314,7 @@ export async function getWalletPortfolio(walletAddress: string): Promise<WalletP
       solValueUsd,
       tokens: [],
       totalValueUsd: solValueUsd,
+      walletAddress,
     };
   }
 }

@@ -22,22 +22,46 @@ export interface SwapOptions {
 }
 
 /**
- * Get Swap Quote from Jupiter
+ * Get Swap Quote from Jupiter (Multi-tier routing with fallback)
  */
 export async function getJupiterQuote(
   inputMint: string,
   outputMint: string,
   amountLamports: number | string,
-  slippageBps = 500
+  slippageBps: number | string = 500
 ): Promise<JupiterQuoteResponse | null> {
-  try {
-    const url = `${CONFIG.JUPITER_QUOTE_API}?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountLamports}&slippageBps=${slippageBps}`;
-    const response = await axios.get(url, { timeout: 10000 });
-    return response.data;
-  } catch (error: any) {
-    console.error('Error fetching Jupiter quote:', error?.response?.data || error.message);
+  if (!inputMint || !outputMint || inputMint.toLowerCase() === outputMint.toLowerCase()) {
     return null;
   }
+
+  const cleanInput = inputMint.trim();
+  const cleanOutput = outputMint.trim();
+  const cleanAmount = String(amountLamports).trim();
+  const parsedSlippage = parseInt(String(slippageBps), 10) || 500;
+
+  if (!cleanAmount || cleanAmount === 'NaN' || cleanAmount === '0' || cleanAmount === 'undefined') {
+    return null;
+  }
+
+  const endpoints = [
+    `https://api.jup.ag/swap/v1/quote?inputMint=${cleanInput}&outputMint=${cleanOutput}&amount=${cleanAmount}&slippageBps=${parsedSlippage}`,
+    `https://lite-api.jup.ag/swap/v1/quote?inputMint=${cleanInput}&outputMint=${cleanOutput}&amount=${cleanAmount}&slippageBps=${parsedSlippage}`,
+    `https://api.jup.ag/swap/v1/quote?inputMint=${cleanInput}&outputMint=${cleanOutput}&amount=${cleanAmount}&slippageBps=${Math.max(parsedSlippage, 1500)}`,
+    `https://lite-api.jup.ag/swap/v1/quote?inputMint=${cleanInput}&outputMint=${cleanOutput}&amount=${cleanAmount}&slippageBps=${Math.max(parsedSlippage, 2500)}`,
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const response = await axios.get(url, { timeout: 8000 });
+      if (response.data && (response.data.outAmount || response.data.routePlan)) {
+        return response.data;
+      }
+    } catch (error: any) {
+      // Try next fallback endpoint
+    }
+  }
+
+  return null;
 }
 
 /**

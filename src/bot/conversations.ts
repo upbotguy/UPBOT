@@ -15,6 +15,8 @@ import {
   cancelLimitOrder,
   deleteLimitOrder,
   getUserLimitOrders,
+  recordTrade,
+  getUserTokenPosition,
 } from '../db/index.js';
 import {
   importWalletAuto,
@@ -41,6 +43,7 @@ import {
 import { executeJupiterSwap, getJupiterQuote } from '../services/swap.js';
 import { CONFIG } from '../config.js';
 import { LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { getT } from '../i18n/index.js';
 
 export interface SessionData {
   targetTokenAddress: string;
@@ -49,6 +52,7 @@ export interface SessionData {
   presetDipPercent?: number;
   presetGainPercent?: number;
   editingOrderId?: number;
+  customMode?: 'custom_dip' | 'custom_pct' | 'custom_price';
 }
 
 export interface UserTradeState {
@@ -56,6 +60,7 @@ export interface UserTradeState {
   targetPriceUsd?: number;
   targetCondition?: 'LTE' | 'GTE';
   editingOrderId?: number;
+  customMode?: 'custom_dip' | 'custom_pct' | 'custom_price';
 }
 
 export const userTradeStateMap = new Map<number, UserTradeState>();
@@ -101,56 +106,58 @@ export function extractTokenAddressFromContext(ctx: Context): string | null {
     return sessionCA;
   }
 
-  // 3. Check SQLite DB
-  if (userId) {
-    const dbCA = getUserActiveTokenDB(userId);
-    if (dbCA && isValidSolanaAddress(dbCA)) {
-      setUserTradeState(userId, { targetTokenAddress: dbCA });
-      return dbCA;
+  // 3. Check callback data
+  const callbackData = ctx.callbackQuery?.data;
+  if (callbackData) {
+    const parts = callbackData.split(':');
+    const lastPart = parts[parts.length - 1];
+    if (isValidSolanaAddress(lastPart)) {
+      if (userId) setUserTradeState(userId, { targetTokenAddress: lastPart });
+      return lastPart;
     }
   }
 
-  // 4. Check message text / callbackQuery message text for Solana Base58 address
-  const text = ctx.callbackQuery?.message?.text || ctx.msg?.text || '';
-  if (text) {
-    const matches = text.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g);
-    if (matches) {
-      for (const candidate of matches) {
-        if (isValidSolanaAddress(candidate)) {
-          if (userId) {
-            setUserTradeState(userId, { targetTokenAddress: candidate });
-          }
-          return candidate;
-        }
-      }
+  // 4. Check persistent database
+  if (userId) {
+    const dbToken = getUserActiveTokenDB(userId);
+    if (dbToken && isValidSolanaAddress(dbToken)) {
+      setUserTradeState(userId, { targetTokenAddress: dbToken });
+      return dbToken;
     }
   }
 
   return null;
 }
 
-export type MyContext = Context & SessionFlavor<SessionData> & ConversationFlavor<Context & SessionFlavor<SessionData>>;
+export type MyContext = ConversationFlavor<Context & SessionFlavor<SessionData>>;
 export type MyConversation = Conversation<MyContext, MyContext>;
 
-/**
- * Robust input waiter that cleanly handles text messages, Cancel buttons, and callback queries
- */
 async function waitForInputOrCancel(
   conversation: MyConversation,
   ctx: MyContext
 ): Promise<{ text?: string; isCancelled: boolean }> {
   const update = await conversation.wait();
 
-  // If user clicked any inline button (e.g. ❌ Cancel or Menu)
+  // If user clicked any cancel/back callback
   if (update.callbackQuery) {
-    update.answerCallbackQuery({ text: '❌ Cancelled' }).catch(() => {});
-    return { isCancelled: true };
+    const data = update.callbackQuery.data || '';
+    if (
+      data.startsWith('menu:') ||
+      data.startsWith('token:') ||
+      data.startsWith('wallet:') ||
+      data.startsWith('orders:') ||
+      data.startsWith('order:') ||
+      data === 'cancel'
+    ) {
+      await update.answerCallbackQuery().catch(() => {});
+      return { isCancelled: true };
+    }
   }
 
   // If user sent a text message
   if (update.message?.text) {
     const text = update.message.text.trim();
-    if (text === '/cancel' || text.toLowerCase() === 'cancel' || text === '❌ Cancel') {
+    if (text === '/cancel' || text.toLowerCase() === 'cancel' || text.includes('Cancel') || text.includes('မလုပ်တော့ပါ')) {
       return { isCancelled: true };
     }
     return { text, isCancelled: false };
@@ -166,15 +173,13 @@ export async function addWalletConversation(conversation: MyConversation, ctx: M
   const userId = ctx.from?.id;
   if (!userId) return;
 
-  const promptMsg = await ctx.reply(
-    `🔐 *Solana Wallet ချိတ်ဆက်ခြင်း (Add Wallet)*\n\n` +
-      `သင်၏ Solana *Private Key (Base58 string)* သို့မဟုတ် *12/24 words Seed Phrase* ကို ပို့ပေးပါခင်ဗျာ။\n\n` +
-      `⚠️ _မှတ်ချက်: လုံခြုံရေးအရ သင်ပို့လိုက်သော message ကို Bot မှ ချက်ချင်း အလိုအလျောက် ဖျက်ပေးပါမည်။_`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard().text('❌ Cancel', 'menu:security'),
-    }
-  );
+  const lang = getUserLanguage(userId);
+  const t = getT(lang);
+
+  const promptMsg = await ctx.reply(t.prompt_add_wallet, {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard().text(t.btn_cancel, 'menu:security'),
+  });
 
   const inputRes = await waitForInputOrCancel(conversation, ctx);
   if (inputRes.isCancelled || !inputRes.text) {
@@ -186,12 +191,10 @@ export async function addWalletConversation(conversation: MyConversation, ctx: M
 
   const input = inputRes.text;
 
-  // Try to delete sensitive message immediately
+  // Delete sensitive message immediately
   try {
     await ctx.api.deleteMessage(ctx.chat!.id, promptMsg.message_id);
-  } catch (err) {
-    // ignore
-  }
+  } catch {}
 
   try {
     const imported = importWalletAuto(input);
@@ -201,29 +204,18 @@ export async function addWalletConversation(conversation: MyConversation, ctx: M
 
     const balance = await getSolBalance(pubkey);
 
-    await ctx.reply(
-      `✅ *Wallet ချိတ်ဆက်မှု အောင်မြင်ပါသည်!* 🎉\n\n` +
-        `💳 *Public Address:* \`${pubkey}\`\n` +
-        `💰 *SOL Balance:* \`${balance.toFixed(4)} SOL\`\n\n` +
-        `အဆိုပါ Wallet ကို Active Wallet အဖြစ် သတ်မှတ်ပြီးပါပြီ။`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard()
-          .text('🎯 Start Trading', 'menu:trade')
-          .row()
-          .text('🔐 Security Menu', 'menu:security'),
-      }
-    );
+    await ctx.reply(t.add_wallet_success(pubkey, balance), {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard()
+        .text(t.btn_trade, 'menu:trade')
+        .row()
+        .text(t.btn_security, 'menu:security'),
+    });
   } catch (error: any) {
-    await ctx.reply(
-      `❌ *Wallet ချိတ်ဆက်မှု မအောင်မြင်ပါ!*\n\n` +
-        `Error: \`${error.message || 'Invalid Private Key or Seed Phrase'}\`\n\n` +
-        `မှန်ကန်သော Base58 Private key သို့မဟုတ် 12/24 words seed phrase ဖြစ်ကြောင်း ပြန်လည်စစ်ဆေးပေးပါ။`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('🔄 Try Again', 'wallet:add').text('🔙 Security', 'menu:security'),
-      }
-    );
+    await ctx.reply(t.add_wallet_failed(error.message), {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text(t.btn_try_again, 'wallet:add').text(t.btn_back_security, 'menu:security'),
+    });
   }
 }
 
@@ -234,15 +226,13 @@ export async function tradeInputConversation(conversation: MyConversation, ctx: 
   const userId = ctx.from?.id;
   if (!userId) return;
 
-  const promptMsg = await ctx.reply(
-    `🎯 *Solana Token Trading*\n\n` +
-      `သင် အရောင်းအဝယ် ပြုလုပ်လိုသော Solana Token ၏ *Contract Address (Mint Address)* ကို ပို့ပေးပါခင်ဗျာ။\n\n` +
-      `ဥပမာ: \`DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263\` (Bonk)`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard().text('❌ Cancel', 'menu:main'),
-    }
-  );
+  const lang = getUserLanguage(userId);
+  const t = getT(lang);
+
+  const promptMsg = await ctx.reply(t.prompt_trade_input, {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard().text(t.btn_cancel, 'menu:main'),
+  });
 
   const inputRes = await waitForInputOrCancel(conversation, ctx);
   if (inputRes.isCancelled || !inputRes.text) {
@@ -255,9 +245,9 @@ export async function tradeInputConversation(conversation: MyConversation, ctx: 
   const ca = inputRes.text;
 
   if (!isValidSolanaAddress(ca)) {
-    await ctx.reply(`❌ *မမှန်ကန်သော Solana Address ဖြစ်နေပါသည်!*\nကျေးဇူးပြု၍ မှန်ကန်သော CA ပို့ပေးပါ။`, {
+    await ctx.reply(`❌ *Invalid Solana Contract Address (CA)!*`, {
       parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard().text('🔄 Try Again', 'menu:trade').text('🔙 Main Menu', 'menu:main'),
+      reply_markup: new InlineKeyboard().text(t.btn_try_again, 'menu:trade').text(t.btn_back_main, 'menu:main'),
     });
     return;
   }
@@ -272,17 +262,18 @@ export async function tradeInputConversation(conversation: MyConversation, ctx: 
   ]);
 
   if (!token) {
-    await ctx.reply(`❌ *Token အချက်အလက် ရှာမတွေ့ပါ!*\nContract Address ကို ပြန်လည်စစ်ဆေးပေးပါ။`, {
+    await ctx.reply(`❌ *Token not found on Solana Network!*\nPlease verify the contract address and try again.`, {
       parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard().text('🔄 Try Again', 'menu:trade'),
+      reply_markup: new InlineKeyboard().text(t.btn_try_again, 'menu:trade'),
     });
     return;
   }
 
   setUserTradeState(userId, { targetTokenAddress: ca });
 
-  const messageText = getTokenDashboardMessage(token, activeWallet, solBalance, tokenBalance);
-  const keyboard = getTokenTradeKeyboard(token.address, token.url);
+  const position = getUserTokenPosition(userId, ca, activeWallet?.publicKey);
+  const messageText = getTokenDashboardMessage(token, activeWallet, solBalance, tokenBalance, lang, position);
+  const keyboard = getTokenTradeKeyboard(token.address, token.url, lang);
 
   await ctx.reply(messageText, {
     parse_mode: 'Markdown',
@@ -299,16 +290,14 @@ export async function customBuyConversation(conversation: MyConversation, ctx: M
   let ca = extractTokenAddressFromContext(ctx);
 
   if (!userId) return;
+  const lang = getUserLanguage(userId);
+  const t = getT(lang);
 
   if (!ca) {
-    const askMsg = await ctx.reply(
-      `🎯 *Token Contract Address (CA) ထည့်သွင်းပါ*\n\n` +
-        `ဝယ်ယူလိုသော Solana Token ၏ *Contract Address (CA)* ကို ပို့ပေးပါခင်ဗျာ:`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('🔙 Main Menu', 'menu:main'),
-      }
-    );
+    const askMsg = await ctx.reply(t.prompt_trade_input, {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text(t.btn_cancel, 'menu:main'),
+    });
     const resp = await waitForInputOrCancel(conversation, ctx);
     if (resp.isCancelled || !resp.text) {
       try {
@@ -321,23 +310,23 @@ export async function customBuyConversation(conversation: MyConversation, ctx: M
       ca = inputCA;
       setUserTradeState(userId, { targetTokenAddress: ca });
     } else {
-      await ctx.reply('❌ မမှန်ကန်သော Token CA ဖြစ်ပါသည်။', {
-        reply_markup: new InlineKeyboard().text('🎯 Trade', 'menu:trade'),
+      await ctx.reply(`❌ Invalid Token Address`, {
+        reply_markup: new InlineKeyboard().text(t.btn_trade, 'menu:trade'),
       });
       return;
     }
   }
 
-  const promptMsg = await ctx.reply(
-    `🟢 *Custom Buy Token*\n\n` +
-      `🪙 *Token:* \`${ca}\`\n\n` +
-      `ဝယ်ယူလိုသော *SOL ပမာဏ* ကို ရိုက်ထည့်ပေးပါခင်ဗျာ။\n\n` +
-      `ဥပမာ: \`0.05\` သို့မဟုတ် \`1.5\``,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard().text('❌ Cancel', `token:refresh:${ca}`),
-    }
-  );
+  const activeWallet = getActiveWallet(userId);
+  const solBalance = activeWallet ? await getSolBalance(activeWallet.publicKey) : 0;
+  const token = await fetchTokenInfo(ca);
+  const symbol = token?.symbol || 'SOL';
+  const price = token?.priceUsd || 0;
+
+  const promptMsg = await ctx.reply(t.prompt_custom_buy(symbol, price, solBalance), {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard().text(t.btn_cancel, `token:refresh:${ca}`),
+  });
 
   const response = await waitForInputOrCancel(conversation, ctx);
   if (response.isCancelled || !response.text) {
@@ -351,8 +340,8 @@ export async function customBuyConversation(conversation: MyConversation, ctx: M
   const solAmount = parseFloat(amountStr);
 
   if (isNaN(solAmount) || solAmount <= 0) {
-    await ctx.reply('❌ မမှန်ကန်သော ပမာဏဖြစ်ပါသည်။ နံပါတ် အမှန်ကိုသာ ထည့်ပေးပါ။', {
-      reply_markup: new InlineKeyboard().text('🔄 Try Again', `buy:custom:${ca}`),
+    await ctx.reply(t.invalid_input_err, {
+      reply_markup: new InlineKeyboard().text(t.btn_try_again, `buy:custom:${ca}`),
     });
     return;
   }
@@ -369,16 +358,14 @@ export async function customSellConversation(conversation: MyConversation, ctx: 
   let ca = extractTokenAddressFromContext(ctx);
 
   if (!userId) return;
+  const lang = getUserLanguage(userId);
+  const t = getT(lang);
 
   if (!ca) {
-    const askMsg = await ctx.reply(
-      `🎯 *Token Contract Address (CA) ထည့်သွင်းပါ*\n\n` +
-        `ရောင်းချလိုသော Solana Token ၏ *Contract Address (CA)* ကို ပို့ပေးပါခင်ဗျာ:`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('🔙 Main Menu', 'menu:main'),
-      }
-    );
+    const askMsg = await ctx.reply(t.prompt_trade_input, {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text(t.btn_cancel, 'menu:main'),
+    });
     const resp = await waitForInputOrCancel(conversation, ctx);
     if (resp.isCancelled || !resp.text) {
       try {
@@ -391,23 +378,23 @@ export async function customSellConversation(conversation: MyConversation, ctx: 
       ca = inputCA;
       setUserTradeState(userId, { targetTokenAddress: ca });
     } else {
-      await ctx.reply('❌ မမှန်ကန်သော Token CA ဖြစ်ပါသည်။', {
-        reply_markup: new InlineKeyboard().text('🎯 Trade', 'menu:trade'),
+      await ctx.reply(`❌ Invalid Token Address`, {
+        reply_markup: new InlineKeyboard().text(t.btn_trade, 'menu:trade'),
       });
       return;
     }
   }
 
-  const promptMsg = await ctx.reply(
-    `🔴 *Custom Sell Token*\n\n` +
-      `🪙 *Token:* \`${ca}\`\n\n` +
-      `ရောင်းချလိုသော *ရာခိုင်နှုန်း (%)* ကို ရိုက်ထည့်ပေးပါ (1 မှ 100 အထိ)။\n\n` +
-      `ဥပမာ: \`35\` သို့မဟုတ် \`80\``,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard().text('❌ Cancel', `token:refresh:${ca}`),
-    }
-  );
+  const activeWallet = getActiveWallet(userId);
+  const tokenBal = activeWallet ? await getTokenBalance(activeWallet.publicKey, ca) : { uiAmount: 0 };
+  const token = await fetchTokenInfo(ca);
+  const symbol = token?.symbol || 'TOKEN';
+  const price = token?.priceUsd || 0;
+
+  const promptMsg = await ctx.reply(t.prompt_custom_sell(symbol, price, tokenBal.uiAmount), {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard().text(t.btn_cancel, `token:refresh:${ca}`),
+  });
 
   const response = await waitForInputOrCancel(conversation, ctx);
   if (response.isCancelled || !response.text) {
@@ -421,8 +408,8 @@ export async function customSellConversation(conversation: MyConversation, ctx: 
   const percent = parseFloat(percentStr);
 
   if (isNaN(percent) || percent <= 0 || percent > 100) {
-    await ctx.reply('❌ မမှန်ကန်သော ရာခိုင်နှုန်းဖြစ်ပါသည်။ 1 မှ 100 ကြားသာ ထည့်ပေးပါ။', {
-      reply_markup: new InlineKeyboard().text('🔄 Try Again', `sell:custom:${ca}`),
+    await ctx.reply(t.invalid_input_err, {
+      reply_markup: new InlineKeyboard().text(t.btn_try_again, `sell:custom:${ca}`),
     });
     return;
   }
@@ -438,30 +425,24 @@ export async function executeBuyFlow(ctx: Context, tokenAddress: string, solAmou
   const userId = ctx.from?.id;
   if (!userId) return;
 
+  const lang = getUserLanguage(userId);
+  const t = getT(lang);
+
   const activeWallet = getActiveWallet(userId);
   if (!activeWallet) {
-    await ctx.reply(
-      '⚠️ *Active Wallet မရှိသေးပါ!*\nကျေးဇူးပြု၍ Security တွင် Wallet အရင်ထည့်သွင်းပေးပါ။',
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('➕ Add Wallet', 'wallet:add'),
-      }
-    );
+    await ctx.reply(t.no_active_wallet_err, {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text(t.btn_add_wallet, 'wallet:add'),
+    });
     return;
   }
 
   const solBalance = await getSolBalance(activeWallet.publicKey);
   if (solBalance < solAmount) {
-    await ctx.reply(
-      `❌ *လက်ကျန် SOL မလုံလောက်ပါ!*\n\n` +
-        `💳 *Your Balance:* \`${solBalance.toFixed(4)} SOL\`\n` +
-        `🛒 *Need:* \`${solAmount} SOL\` + Gas Fee\n\n` +
-        `ကျေးဇူးပြု၍ \`${activeWallet.publicKey}\` သို့ SOL ဖြည့်သွင်းပါ။`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('🔄 Refresh Balance', `token:refresh:${tokenAddress}`),
-      }
-    );
+    await ctx.reply(t.insufficient_sol_err(solAmount, solBalance), {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text(t.btn_refresh, `token:refresh:${tokenAddress}`),
+    });
     return;
   }
 
@@ -469,13 +450,12 @@ export async function executeBuyFlow(ctx: Context, tokenAddress: string, solAmou
   const slippageBps = settings.slippage_bps || 500;
   const priorityFeeLamports = Math.floor((settings.priority_fee_sol || 0.001) * LAMPORTS_PER_SOL);
 
-  const statusMsg = await ctx.reply(
-    `⚡ *Jupiter Quote ရယူနေပါသည်...*\n` +
-      `🛒 *Buying with:* \`${solAmount} SOL\`\n` +
-      `🪙 *Token:* \`${tokenAddress}\`\n` +
-      `⚡ *Slippage:* \`${slippageBps / 100}%\``,
-    { parse_mode: 'Markdown' }
-  );
+  const token = await fetchTokenInfo(tokenAddress);
+  const symbol = token?.symbol || 'SOL';
+
+  const statusMsg = await ctx.reply(t.swap_swapping(symbol, `${solAmount} SOL`), {
+    parse_mode: 'Markdown',
+  });
 
   const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
   const quote = await getJupiterQuote(CONFIG.WSOL_MINT, tokenAddress, lamports, slippageBps);
@@ -484,27 +464,16 @@ export async function executeBuyFlow(ctx: Context, tokenAddress: string, solAmou
     await ctx.api.editMessageText(
       ctx.chat!.id,
       statusMsg.message_id,
-      `❌ *Jupiter Quote မရရှိပါ!*\nLiquidity မလုံလောက်ခြင်း သို့မဟုတ် Token Pair မရှိခြင်း ဖြစ်နိုင်ပါသည်။`,
+      `❌ *Jupiter Swap Quote Unavailable!*\nNo route or insufficient liquidity found.`,
       {
         parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('🔙 Token Dashboard', `token:refresh:${tokenAddress}`),
+        reply_markup: new InlineKeyboard().text(t.btn_trade_dashboard, `token:refresh:${tokenAddress}`),
       }
     );
     return;
   }
 
   const outEstimate = (parseInt(quote.outAmount) / 1e6).toFixed(2);
-
-  await ctx.api.editMessageText(
-    ctx.chat!.id,
-    statusMsg.message_id,
-    `🚀 *Transaction အား Solana Network သို့ Turbo ဖြင့် ပို့ဆောင်နေပါသည်...*\n\n` +
-      `💰 *Pay:* \`${solAmount} SOL\`\n` +
-      `📦 *Est. Receive:* ~\`${outEstimate}\` tokens\n` +
-      `⚡ *Price Impact:* \`${quote.priceImpactPct}%\`\n` +
-      `⛽ *Priority Mode:* \`Turbo (Very High)\``,
-    { parse_mode: 'Markdown' }
-  );
 
   try {
     const imported = importWalletAuto(activeWallet.privateKey);
@@ -514,28 +483,41 @@ export async function executeBuyFlow(ctx: Context, tokenAddress: string, solAmou
     });
 
     if (swapResult.success && swapResult.signature) {
+      const boughtAmountTokens = parseFloat(outEstimate) || (parseInt(quote.outAmount) / 10 ** (token?.decimals || 6));
+      recordTrade({
+        userId,
+        walletAddress: activeWallet.publicKey,
+        tokenAddress,
+        tokenSymbol: symbol,
+        tradeType: 'BUY',
+        amountSol: solAmount,
+        tokenAmount: boughtAmountTokens,
+        priceUsd: token?.priceUsd || 0,
+        marketCapUsd: token?.marketCap || 0,
+        txSignature: swapResult.signature,
+      });
+
       await ctx.api.editMessageText(
         ctx.chat!.id,
         statusMsg.message_id,
-        `✅ *ဝယ်ယူမှု အောင်မြင်ပါသည်!* 🎉\n\n` +
-          `💰 *Amount:* \`${solAmount} SOL\`\n` +
-          `🔗 *Solscan:* [View Transaction](https://solscan.io/tx/${swapResult.signature})`,
+        t.swap_success(symbol, token?.priceUsd || 0, `${solAmount} SOL`, outEstimate, swapResult.signature),
         {
           parse_mode: 'Markdown',
           reply_markup: new InlineKeyboard()
-            .url('🔍 Solscan', `https://solscan.io/tx/${swapResult.signature}`)
+            .url(t.btn_view_solscan, `https://solscan.io/tx/${swapResult.signature}`)
             .row()
-            .text('🔄 Refresh Token', `token:refresh:${tokenAddress}`),
+            .text('🖼️ Share PnL Card', `token:pnl:${tokenAddress}`)
+            .text(t.btn_trade_dashboard, `token:refresh:${tokenAddress}`),
         }
       );
     } else {
       await ctx.api.editMessageText(
         ctx.chat!.id,
         statusMsg.message_id,
-        `❌ *Transaction Failed:* \`${swapResult.error || 'Unknown error'}\``,
+        t.swap_failed(symbol, swapResult.error || 'Transaction failed'),
         {
           parse_mode: 'Markdown',
-          reply_markup: new InlineKeyboard().text('🔙 Token Dashboard', `token:refresh:${tokenAddress}`),
+          reply_markup: new InlineKeyboard().text(t.btn_trade_dashboard, `token:refresh:${tokenAddress}`),
         }
       );
     }
@@ -543,10 +525,10 @@ export async function executeBuyFlow(ctx: Context, tokenAddress: string, solAmou
     await ctx.api.editMessageText(
       ctx.chat!.id,
       statusMsg.message_id,
-      `❌ *Swap Error:* \`${err.message}\``,
+      t.swap_failed(symbol, err.message),
       {
         parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('🔙 Token Dashboard', `token:refresh:${tokenAddress}`),
+        reply_markup: new InlineKeyboard().text(t.btn_trade_dashboard, `token:refresh:${tokenAddress}`),
       }
     );
   }
@@ -559,35 +541,33 @@ export async function executeSellFlow(ctx: Context, tokenAddress: string, percen
   const userId = ctx.from?.id;
   if (!userId) return;
 
+  const lang = getUserLanguage(userId);
+  const t = getT(lang);
+
   const activeWallet = getActiveWallet(userId);
   if (!activeWallet) {
-    await ctx.reply(
-      '⚠️ *Active Wallet မရှိသေးပါ!*\nကျေးဇူးပြု၍ Security တွင် Wallet အရင်ထည့်သွင်းပေးပါ။',
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('➕ Add Wallet', 'wallet:add'),
-      }
-    );
+    await ctx.reply(t.no_active_wallet_err, {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text(t.btn_add_wallet, 'wallet:add'),
+    });
     return;
   }
+
+  const token = await fetchTokenInfo(tokenAddress);
+  const symbol = token?.symbol || 'TOKEN';
 
   const tokenBal = await getTokenBalance(activeWallet.publicKey, tokenAddress);
   if (tokenBal.uiAmount <= 0) {
-    await ctx.reply(
-      `❌ *ရောင်းချရန် Token Balance မရှိပါ!*\n\n` +
-        `Holding: \`0\` Token\n` +
-        `Wallet: \`${formatAddress(activeWallet.publicKey)}\``,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('🔙 Token Dashboard', `token:refresh:${tokenAddress}`),
-      }
-    );
+    await ctx.reply(t.insufficient_token_err(symbol), {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text(t.btn_trade_dashboard, `token:refresh:${tokenAddress}`),
+    });
     return;
   }
 
-  const rawAmountToSell = BigInt(tokenBal.amount) * BigInt(Math.floor(percent)) / BigInt(100);
+  const rawAmountToSell = (BigInt(tokenBal.amount) * BigInt(Math.floor(percent))) / BigInt(100);
   if (rawAmountToSell <= 0n) {
-    await ctx.reply('❌ ရောင်းချမည့် ပမာဏ နည်းလွန်းနေပါသည်။');
+    await ctx.reply('❌ Sell amount too small to execute.');
     return;
   }
 
@@ -595,12 +575,9 @@ export async function executeSellFlow(ctx: Context, tokenAddress: string, percen
   const slippageBps = settings.slippage_bps || 500;
   const priorityFeeLamports = Math.floor((settings.priority_fee_sol || 0.001) * LAMPORTS_PER_SOL);
 
-  const statusMsg = await ctx.reply(
-    `⚡ *Jupiter Quote ရယူနေပါသည်...*\n` +
-      `🔴 *Selling:* \`${percent}%\` (~${(tokenBal.uiAmount * (percent / 100)).toFixed(2)} tokens)\n` +
-      `⚡ *Slippage:* \`${slippageBps / 100}%\``,
-    { parse_mode: 'Markdown' }
-  );
+  const statusMsg = await ctx.reply(t.swap_swapping(symbol, `${percent}% (~${(tokenBal.uiAmount * (percent / 100)).toFixed(2)} tokens)`), {
+    parse_mode: 'Markdown',
+  });
 
   const quote = await getJupiterQuote(tokenAddress, CONFIG.WSOL_MINT, rawAmountToSell.toString(), slippageBps);
 
@@ -608,27 +585,16 @@ export async function executeSellFlow(ctx: Context, tokenAddress: string, percen
     await ctx.api.editMessageText(
       ctx.chat!.id,
       statusMsg.message_id,
-      `❌ *Jupiter Quote မရရှိပါ!*\nLiquidity မလုံလောက်ခြင်း ဖြစ်နိုင်ပါသည်။`,
+      `❌ *Jupiter Quote Unavailable!*\nInsufficient liquidity.`,
       {
         parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('🔙 Token Dashboard', `token:refresh:${tokenAddress}`),
+        reply_markup: new InlineKeyboard().text(t.btn_trade_dashboard, `token:refresh:${tokenAddress}`),
       }
     );
     return;
   }
 
   const outSol = (parseInt(quote.outAmount) / LAMPORTS_PER_SOL).toFixed(4);
-
-  await ctx.api.editMessageText(
-    ctx.chat!.id,
-    statusMsg.message_id,
-    `🚀 *Transaction အား Solana Network သို့ Turbo ဖြင့် ပို့ဆောင်နေပါသည်...*\n\n` +
-      `📦 *Selling:* \`${percent}%\`\n` +
-      `💰 *Est. Receive:* ~\`${outSol} SOL\`\n` +
-      `⚡ *Price Impact:* \`${quote.priceImpactPct}%\`\n` +
-      `⛽ *Priority Mode:* \`Turbo (Very High)\``,
-    { parse_mode: 'Markdown' }
-  );
 
   try {
     const imported = importWalletAuto(activeWallet.privateKey);
@@ -638,28 +604,41 @@ export async function executeSellFlow(ctx: Context, tokenAddress: string, percen
     });
 
     if (swapResult.success && swapResult.signature) {
+      const soldAmountTokens = tokenBal.uiAmount * (percent / 100);
+      recordTrade({
+        userId,
+        walletAddress: activeWallet.publicKey,
+        tokenAddress,
+        tokenSymbol: symbol,
+        tradeType: 'SELL',
+        amountSol: parseFloat(outSol) || 0,
+        tokenAmount: soldAmountTokens,
+        priceUsd: token?.priceUsd || 0,
+        marketCapUsd: token?.marketCap || 0,
+        txSignature: swapResult.signature,
+      });
+
       await ctx.api.editMessageText(
         ctx.chat!.id,
         statusMsg.message_id,
-        `✅ *ရောင်းချမှု အောင်မြင်ပါသည်!* 🎉\n\n` +
-          `💰 *Received:* ~\`${outSol} SOL\`\n` +
-          `🔗 *Solscan:* [View Transaction](https://solscan.io/tx/${swapResult.signature})`,
+        t.swap_success(symbol, token?.priceUsd || 0, `${percent}%`, `${outSol} SOL`, swapResult.signature),
         {
           parse_mode: 'Markdown',
           reply_markup: new InlineKeyboard()
-            .url('🔍 Solscan', `https://solscan.io/tx/${swapResult.signature}`)
+            .url(t.btn_view_solscan, `https://solscan.io/tx/${swapResult.signature}`)
             .row()
-            .text('🔄 Refresh Token', `token:refresh:${tokenAddress}`),
+            .text('🖼️ Share PnL Card', `token:pnl:${tokenAddress}`)
+            .text(t.btn_trade_dashboard, `token:refresh:${tokenAddress}`),
         }
       );
     } else {
       await ctx.api.editMessageText(
         ctx.chat!.id,
         statusMsg.message_id,
-        `❌ *Transaction Failed:* \`${swapResult.error || 'Unknown error'}\``,
+        t.swap_failed(symbol, swapResult.error || 'Transaction failed'),
         {
           parse_mode: 'Markdown',
-          reply_markup: new InlineKeyboard().text('🔙 Token Dashboard', `token:refresh:${tokenAddress}`),
+          reply_markup: new InlineKeyboard().text(t.btn_trade_dashboard, `token:refresh:${tokenAddress}`),
         }
       );
     }
@@ -667,33 +646,31 @@ export async function executeSellFlow(ctx: Context, tokenAddress: string, percen
     await ctx.api.editMessageText(
       ctx.chat!.id,
       statusMsg.message_id,
-      `❌ *Swap Error:* \`${err.message}\``,
+      t.swap_failed(symbol, err.message),
       {
         parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('🔙 Token Dashboard', `token:refresh:${tokenAddress}`),
+        reply_markup: new InlineKeyboard().text(t.btn_trade_dashboard, `token:refresh:${tokenAddress}`),
       }
     );
   }
 }
 
 /**
- * Conversation: Limit Buy Order Setup
+ * Conversation: Limit Buy Order Setup (Supports Custom Dip % and Custom USD Price)
  */
 export async function limitBuyConversation(conversation: MyConversation, ctx: MyContext) {
   const userId = ctx.from?.id;
   let ca = extractTokenAddressFromContext(ctx);
 
   if (!userId) return;
+  const lang = getUserLanguage(userId);
+  const t = getT(lang);
 
   if (!ca) {
-    const askMsg = await ctx.reply(
-      `🎯 *Token Contract Address (CA) ထည့်သွင်းပါ*\n\n` +
-        `Limit Buy တင်လိုသော Solana Token ၏ *Contract Address (CA)* ကို ပို့ပေးပါခင်ဗျာ:`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('🔙 Main Menu', 'menu:main'),
-      }
-    );
+    const askMsg = await ctx.reply(t.prompt_trade_input, {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text(t.btn_cancel, 'menu:main'),
+    });
     const resp = await waitForInputOrCancel(conversation, ctx);
     if (resp.isCancelled || !resp.text) {
       try {
@@ -706,8 +683,8 @@ export async function limitBuyConversation(conversation: MyConversation, ctx: My
       ca = inputCA;
       setUserTradeState(userId, { targetTokenAddress: ca });
     } else {
-      await ctx.reply('❌ မမှန်ကန်သော Token CA ဖြစ်ပါသည်။', {
-        reply_markup: new InlineKeyboard().text('🎯 Trade', 'menu:trade'),
+      await ctx.reply('❌ Invalid Solana CA.', {
+        reply_markup: new InlineKeyboard().text(t.btn_trade, 'menu:trade'),
       });
       return;
     }
@@ -715,29 +692,28 @@ export async function limitBuyConversation(conversation: MyConversation, ctx: My
 
   const activeWallet = getActiveWallet(userId);
   if (!activeWallet) {
-    await ctx.reply('⚠️ Limit Order မတင်မီ Security တွင် Wallet ချိတ်ဆက်ပေးပါ။', {
-      reply_markup: new InlineKeyboard().text('➕ Add Wallet', 'wallet:add'),
+    await ctx.reply(t.no_active_wallet_err, {
+      reply_markup: new InlineKeyboard().text(t.btn_add_wallet, 'wallet:add'),
     });
     return;
   }
 
   const token = await fetchTokenInfo(ca);
+  const symbol = token?.symbol || 'SOL';
   const currentPrice = token?.priceUsd || 0;
   const state = getUserTradeState(userId);
   let targetPriceUsd = state?.targetPriceUsd || (ctx as any).session?.targetPriceUsd;
 
-  // If custom target price not already calculated from preset, ask user
   if (!targetPriceUsd) {
-    const pricePrompt = await ctx.reply(
-      `⏱️ *Limit Buy Order သတ်မှတ်ခြင်း*\n\n` +
-        `🪙 *Token:* $${token?.symbol || 'SOL'}\n` +
-        `💵 *Current Price:* \`${formatCurrency(currentPrice)}\`\n\n` +
-        `ဝယ်ယူလိုသော *Target Price (USD)* သို့မဟုတ် *Dip %* (ဥပမာ: \`0.000003\` သို့မဟုတ် \`-15%\`) ကို ရိုက်ထည့်ပေးပါ:`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('❌ Cancel', `token:refresh:${ca}`),
-      }
-    );
+    const promptText =
+      state?.customMode === 'custom_dip'
+        ? t.prompt_custom_dip_pct(symbol, currentPrice)
+        : t.prompt_limit_buy_price(symbol, currentPrice);
+
+    const pricePrompt = await ctx.reply(promptText, {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text(t.btn_cancel, `token:refresh:${ca}`),
+    });
 
     const priceRes = await waitForInputOrCancel(conversation, ctx);
     if (priceRes.isCancelled || !priceRes.text) {
@@ -746,34 +722,30 @@ export async function limitBuyConversation(conversation: MyConversation, ctx: My
       } catch {}
       return;
     }
-    const priceText = priceRes.text;
+    const priceText = priceRes.text.trim();
 
-    if (priceText.endsWith('%') || priceText.startsWith('-')) {
+    // If input is e.g. "15", "15%", "-15%" when in custom_dip mode or when it has % or -
+    if (state?.customMode === 'custom_dip' || priceText.endsWith('%') || priceText.startsWith('-')) {
       const dipPct = Math.abs(parseFloat(priceText.replace('%', '').replace('-', '')));
       if (isNaN(dipPct) || dipPct <= 0 || dipPct >= 100) {
-        await ctx.reply('❌ မမှန်ကန်သော Dip % ဖြစ်ပါသည်။');
+        await ctx.reply(t.invalid_input_err);
         return;
       }
       targetPriceUsd = currentPrice * (1 - dipPct / 100);
     } else {
       targetPriceUsd = parseFloat(priceText);
       if (isNaN(targetPriceUsd) || targetPriceUsd <= 0) {
-        await ctx.reply('❌ မမှန်ကန်သော စျေးနှုန်းဖြစ်ပါသည်။');
+        await ctx.reply(t.invalid_input_err);
         return;
       }
     }
   }
 
-  // Ask for SOL amount
-  const amountPrompt = await ctx.reply(
-    `💰 *ဝယ်ယူမည့် SOL ပမာဏ ထည့်ပါ*\n\n` +
-      `Target Price: \`${formatCurrency(targetPriceUsd)}\` သို့ ကျဆင်းချိန်တွင် ဝယ်ယူမည့် *SOL ပမာဏ* ကို ရိုက်ထည့်ပေးပါ:\n\n` +
-      `ဥပမာ: \`0.1\` သို့မဟုတ် \`0.5\``,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard().text('❌ Cancel', `token:refresh:${ca}`),
-    }
-  );
+  const solBal = await getSolBalance(activeWallet.publicKey);
+  const amountPrompt = await ctx.reply(t.prompt_limit_buy_amount(symbol, targetPriceUsd, solBal), {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard().text(t.btn_cancel, `token:refresh:${ca}`),
+  });
 
   const amountRes = await waitForInputOrCancel(conversation, ctx);
   if (amountRes.isCancelled || !amountRes.text) {
@@ -785,7 +757,7 @@ export async function limitBuyConversation(conversation: MyConversation, ctx: My
   const solAmount = parseFloat(amountRes.text);
 
   if (isNaN(solAmount) || solAmount <= 0) {
-    await ctx.reply('❌ မမှန်ကန်သော SOL ပမာဏဖြစ်ပါသည်။');
+    await ctx.reply(t.invalid_input_err);
     return;
   }
 
@@ -794,49 +766,38 @@ export async function limitBuyConversation(conversation: MyConversation, ctx: My
     userId,
     walletAddress: activeWallet.publicKey,
     tokenAddress: ca,
-    tokenSymbol: token?.symbol || 'UNKNOWN',
+    tokenSymbol: symbol,
     orderType: 'BUY_LIMIT',
     targetPriceUsd,
     condition: 'LTE',
     amountSol: solAmount,
   });
 
-  await ctx.reply(
-    `✅ *Limit Buy Order #${order.id} တင်ပြီးပါပြီ!* 🎯\n\n` +
-      `🪙 *Token:* *$${order.token_symbol}*\n` +
-      `💵 *Target Price:* \`${formatCurrency(order.target_price_usd)}\` (≤ Target တွင် ဝယ်မည်)\n` +
-      `💰 *Buy Amount:* \`${solAmount} SOL\`\n` +
-      `💳 *Wallet:* \`${formatAddress(activeWallet.publicKey)}\`\n` +
-      `⚡ *Slippage:* \`5%\`\n\n` +
-      `_စျေးနှုန်း Target သို့ ရောက်ရှိပါက Bot မှ အလိုအလျောက် ဝယ်ယူပြီး Notification ပို့ပေးပါမည်။_`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard()
-        .text('📋 View Orders', 'menu:orders')
-        .row()
-        .text('🎯 Trade Dashboard', `token:refresh:${ca}`),
-    }
-  );
+  await ctx.reply(t.limit_order_created('BUY LIMIT (Dip)', symbol, targetPriceUsd, `${solAmount} SOL`), {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard()
+      .text(t.btn_orders, 'menu:orders')
+      .row()
+      .text(t.btn_trade_dashboard, `token:refresh:${ca}`),
+  });
 }
 
 /**
- * Conversation: Limit Sell Order Setup (Take Profit / Stop Loss)
+ * Conversation: Limit Sell Order Setup (Supports Custom TP/SL % and Custom USD Price)
  */
 export async function limitSellConversation(conversation: MyConversation, ctx: MyContext) {
   const userId = ctx.from?.id;
   let ca = extractTokenAddressFromContext(ctx);
 
   if (!userId) return;
+  const lang = getUserLanguage(userId);
+  const t = getT(lang);
 
   if (!ca) {
-    const askMsg = await ctx.reply(
-      `🎯 *Token Contract Address (CA) ထည့်သွင်းပါ*\n\n` +
-        `Limit Sell တင်လိုသော Solana Token ၏ *Contract Address (CA)* ကို ပို့ပေးပါခင်ဗျာ:`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('🔙 Main Menu', 'menu:main'),
-      }
-    );
+    const askMsg = await ctx.reply(t.prompt_trade_input, {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text(t.btn_cancel, 'menu:main'),
+    });
     const resp = await waitForInputOrCancel(conversation, ctx);
     if (resp.isCancelled || !resp.text) {
       try {
@@ -849,8 +810,8 @@ export async function limitSellConversation(conversation: MyConversation, ctx: M
       ca = inputCA;
       setUserTradeState(userId, { targetTokenAddress: ca });
     } else {
-      await ctx.reply('❌ မမှန်ကန်သော Token CA ဖြစ်ပါသည်။', {
-        reply_markup: new InlineKeyboard().text('🎯 Trade', 'menu:trade'),
+      await ctx.reply('❌ Invalid Token CA.', {
+        reply_markup: new InlineKeyboard().text(t.btn_trade, 'menu:trade'),
       });
       return;
     }
@@ -858,30 +819,29 @@ export async function limitSellConversation(conversation: MyConversation, ctx: M
 
   const activeWallet = getActiveWallet(userId);
   if (!activeWallet) {
-    await ctx.reply('⚠️ Limit Order မတင်မီ Security တွင် Wallet ချိတ်ဆက်ပေးပါ။', {
-      reply_markup: new InlineKeyboard().text('➕ Add Wallet', 'wallet:add'),
+    await ctx.reply(t.no_active_wallet_err, {
+      reply_markup: new InlineKeyboard().text(t.btn_add_wallet, 'wallet:add'),
     });
     return;
   }
 
   const token = await fetchTokenInfo(ca);
+  const symbol = token?.symbol || 'TOKEN';
   const currentPrice = token?.priceUsd || 0;
   const state = getUserTradeState(userId);
   let targetPriceUsd = state?.targetPriceUsd || (ctx as any).session?.targetPriceUsd;
   let condition: 'LTE' | 'GTE' = state?.targetCondition || (ctx as any).session?.targetCondition || 'GTE';
 
-  // If custom target price not already calculated, ask user
   if (!targetPriceUsd) {
-    const pricePrompt = await ctx.reply(
-      `⏱️ *Limit Sell (TP/SL) Order သတ်မှတ်ခြင်း*\n\n` +
-        `🪙 *Token:* $${token?.symbol || 'SOL'}\n` +
-        `💵 *Current Price:* \`${formatCurrency(currentPrice)}\`\n\n` +
-        `ရောင်းချလိုသော *Target Price (USD)* သို့မဟုတ် *Gain % (+50%) / Stop Loss (-20%)* ကို ရိုက်ထည့်ပေးပါ:`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: new InlineKeyboard().text('❌ Cancel', `token:refresh:${ca}`),
-      }
-    );
+    const promptText =
+      state?.customMode === 'custom_pct'
+        ? t.prompt_custom_tpsl_pct(symbol, currentPrice)
+        : t.prompt_limit_sell_price(symbol, currentPrice, true);
+
+    const pricePrompt = await ctx.reply(promptText, {
+      parse_mode: 'Markdown',
+      reply_markup: new InlineKeyboard().text(t.btn_cancel, `token:refresh:${ca}`),
+    });
 
     const priceRes = await waitForInputOrCancel(conversation, ctx);
     if (priceRes.isCancelled || !priceRes.text) {
@@ -890,36 +850,37 @@ export async function limitSellConversation(conversation: MyConversation, ctx: M
       } catch {}
       return;
     }
-    const priceText = priceRes.text;
+    const priceText = priceRes.text.trim();
 
-    if (priceText.endsWith('%') || priceText.startsWith('+') || priceText.startsWith('-')) {
+    if (
+      state?.customMode === 'custom_pct' ||
+      priceText.endsWith('%') ||
+      priceText.startsWith('+') ||
+      priceText.startsWith('-')
+    ) {
       const rawPct = parseFloat(priceText.replace('%', '').replace('+', ''));
-      if (isNaN(rawPct)) {
-        await ctx.reply('❌ မမှန်ကန်သော % ဖြစ်ပါသည်။');
+      if (isNaN(rawPct) || rawPct === 0) {
+        await ctx.reply(t.invalid_input_err);
         return;
       }
       targetPriceUsd = currentPrice * (1 + rawPct / 100);
-      condition = rawPct >= 0 ? 'GTE' : 'LTE';
+      condition = rawPct > 0 ? 'GTE' : 'LTE';
     } else {
       targetPriceUsd = parseFloat(priceText);
       if (isNaN(targetPriceUsd) || targetPriceUsd <= 0) {
-        await ctx.reply('❌ မမှန်ကန်သော စျေးနှုန်းဖြစ်ပါသည်။');
+        await ctx.reply(t.invalid_input_err);
         return;
       }
       condition = targetPriceUsd >= currentPrice ? 'GTE' : 'LTE';
     }
   }
 
-  // Ask for Sell %
-  const amountPrompt = await ctx.reply(
-    `📦 *ရောင်းချမည့် ပမာဏ ရာခိုင်နှုန်း (%)\n\n` +
-      `Target Price: \`${formatCurrency(targetPriceUsd)}\` သို့ ရောက်ရှိချိန်တွင် ရောင်းမည့် *ရာခိုင်နှုန်း (%)* ကို ရိုက်ထည့်ပေးပါ (1 မှ 100 အထိ):\n\n` +
-      `ဥပမာ: \`50\` သို့မဟုတ် \`100\``,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard().text('❌ Cancel', `token:refresh:${ca}`),
-    }
-  );
+  const tokenBal = await getTokenBalance(activeWallet.publicKey, ca);
+  const isTP = condition === 'GTE';
+  const amountPrompt = await ctx.reply(t.prompt_limit_sell_amount(symbol, targetPriceUsd, tokenBal.uiAmount, isTP), {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard().text(t.btn_cancel, `token:refresh:${ca}`),
+  });
 
   const amountRes = await waitForInputOrCancel(conversation, ctx);
   if (amountRes.isCancelled || !amountRes.text) {
@@ -932,7 +893,7 @@ export async function limitSellConversation(conversation: MyConversation, ctx: M
   const percent = parseFloat(percentStr);
 
   if (isNaN(percent) || percent <= 0 || percent > 100) {
-    await ctx.reply('❌ မမှန်ကန်သော ရာခိုင်နှုန်းဖြစ်ပါသည်။ 1 မှ 100 ကြား ထည့်ပေးပါ။');
+    await ctx.reply(t.invalid_input_err);
     return;
   }
 
@@ -941,29 +902,21 @@ export async function limitSellConversation(conversation: MyConversation, ctx: M
     userId,
     walletAddress: activeWallet.publicKey,
     tokenAddress: ca,
-    tokenSymbol: token?.symbol || 'UNKNOWN',
+    tokenSymbol: symbol,
     orderType: 'SELL_LIMIT',
     targetPriceUsd,
     condition,
     amountPercent: percent,
   });
 
-  const orderTypeLabel = condition === 'GTE' ? 'Take Profit (TP)' : 'Stop Loss (SL)';
-
   await ctx.reply(
-    `✅ *Limit Sell Order #${order.id} [${orderTypeLabel}] တင်ပြီးပါပြီ!* 🎯\n\n` +
-      `🪙 *Token:* *$${order.token_symbol}*\n` +
-      `💵 *Target Price:* \`${formatCurrency(order.target_price_usd)}\` (${condition === 'GTE' ? '≥ Target' : '≤ Target'} တွင် ရောင်းမည်)\n` +
-      `📦 *Sell Amount:* \`${percent}%\`\n` +
-      `💳 *Wallet:* \`${formatAddress(activeWallet.publicKey)}\`\n` +
-      `⚡ *Slippage:* \`5%\`\n\n` +
-      `_စျေးနှုန်း Target သို့ ရောက်ရှိပါက Bot မှ အလိုအလျောက် ရောင်းချပြီး Notification ပို့ပေးပါမည်။_`,
+    t.limit_order_created(isTP ? 'TAKE PROFIT (TP)' : 'STOP LOSS (SL)', symbol, targetPriceUsd, `${percent}%`),
     {
       parse_mode: 'Markdown',
       reply_markup: new InlineKeyboard()
-        .text('📋 View Orders', 'menu:orders')
+        .text(t.btn_orders, 'menu:orders')
         .row()
-        .text('🎯 Trade Dashboard', `token:refresh:${ca}`),
+        .text(t.btn_trade_dashboard, `token:refresh:${ca}`),
     }
   );
 }
@@ -978,20 +931,23 @@ export async function editOrderPriceConversation(
   const userId = ctx.from?.id;
   if (!userId) return;
 
+  const lang = getUserLanguage(userId);
+  const t = getT(lang);
+
   const state = getUserTradeState(userId);
   const orderId = state?.editingOrderId;
 
   if (!orderId) {
-    await ctx.reply('❌ ပြင်ဆင်မည့် Order ကို ရှာမတွေ့ပါ။', {
-      reply_markup: new InlineKeyboard().text('📋 All Orders', 'menu:orders'),
+    await ctx.reply('❌ Order not found.', {
+      reply_markup: new InlineKeyboard().text(t.btn_orders, 'menu:orders'),
     });
     return;
   }
 
   const order = getLimitOrderById(userId, orderId);
   if (!order || order.status !== 'PENDING') {
-    await ctx.reply('❌ ဤ Order သည် ပယ်ဖျက်ပြီး သို့မဟုတ် အလုပ်လုပ်ပြီးဖြစ်ပါသည်။', {
-      reply_markup: new InlineKeyboard().text('📋 All Orders', 'menu:orders'),
+    await ctx.reply('❌ Order is no longer pending or has been removed.', {
+      reply_markup: new InlineKeyboard().text(t.btn_orders, 'menu:orders'),
     });
     return;
   }
@@ -999,23 +955,13 @@ export async function editOrderPriceConversation(
   const token = await fetchTokenInfo(order.token_address);
   const currentPrice = token?.priceUsd || order.target_price_usd;
 
-  const promptMsg = await ctx.reply(
-    `✏️ *Edit Target Price - Order #${order.id}*\n\n` +
-      `🪙 *Token:* $${order.token_symbol}\n` +
-      `📊 *Current Price:* \`${formatCurrency(currentPrice)}\`\n` +
-      `🎯 *Current Target:* \`${formatCurrency(order.target_price_usd)}\` (${order.condition})\n\n` +
-      `ပြောင်းလဲလိုသော *Target Price (USD)* သို့မဟုတ် *% (Dip/Gain)* ကို ရိုက်ထည့်ပေးပါ:\n\n` +
-      `ဥပမာ:\n` +
-      `• တိုက်ရိုက် USD: \`0.005\`\n` +
-      `• Dip / Gain %: \`-10%\` သို့မဟုတ် \`+25%\``,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard()
-        .text('❌ Cancel', `order:view:${order.id}`)
-        .row()
-        .text('📋 All Orders', 'menu:orders'),
-    }
-  );
+  const promptMsg = await ctx.reply(t.prompt_edit_price(order.id, order.target_price_usd), {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard()
+      .text(t.btn_cancel, `order:view:${order.id}`)
+      .row()
+      .text(t.btn_back_orders, 'menu:orders'),
+  });
 
   const res = await waitForInputOrCancel(conversation, ctx);
   if (res.isCancelled || !res.text) {
@@ -1030,51 +976,30 @@ export async function editOrderPriceConversation(
   let condition: 'LTE' | 'GTE';
 
   if (priceText.endsWith('%') || priceText.startsWith('+') || priceText.startsWith('-')) {
-    const rawPct = parseFloat(priceText.replace('%', ''));
-    if (isNaN(rawPct)) {
-      await ctx.reply('❌ မမှန်ကန်သော ရာခိုင်နှုန်းဖြစ်ပါသည်။');
+    const rawPct = parseFloat(priceText.replace('%', '').replace('+', ''));
+    if (isNaN(rawPct) || rawPct === 0) {
+      await ctx.reply(t.invalid_input_err);
       return;
     }
     targetPriceUsd = currentPrice * (1 + rawPct / 100);
-    if (order.order_type === 'BUY_LIMIT') {
-      condition = 'LTE';
-    } else {
-      condition = rawPct >= 0 ? 'GTE' : 'LTE';
-    }
+    condition = order.order_type === 'BUY_LIMIT' ? 'LTE' : (rawPct > 0 ? 'GTE' : 'LTE');
   } else {
     targetPriceUsd = parseFloat(priceText);
     if (isNaN(targetPriceUsd) || targetPriceUsd <= 0) {
-      await ctx.reply('❌ မမှန်ကန်သော စျေးနှုန်းဖြစ်ပါသည်။');
+      await ctx.reply(t.invalid_input_err);
       return;
     }
-    if (order.order_type === 'BUY_LIMIT') {
-      condition = targetPriceUsd <= currentPrice ? 'LTE' : 'LTE';
-    } else {
-      condition = targetPriceUsd >= currentPrice ? 'GTE' : 'LTE';
-    }
+    condition = order.order_type === 'BUY_LIMIT' ? 'LTE' : (targetPriceUsd >= currentPrice ? 'GTE' : 'LTE');
   }
 
-  const success = updateLimitOrderDetails(userId, order.id, {
-    targetPriceUsd,
-    condition,
-  });
-
-  if (!success) {
-    await ctx.reply('❌ Order ပြင်ဆင်ခြင်း မအောင်မြင်ပါ။ (Order မရှိတော့ပါ သို့မဟုတ် Status ပြောင်းသွားပါသည်)');
-    return;
-  }
-
+  updateLimitOrderDetails(userId, order.id, { targetPriceUsd, condition });
   const updatedOrder = getLimitOrderById(userId, order.id);
   if (!updatedOrder) return;
 
-  await ctx.reply(
-    `✅ *Order #${order.id} ၏ Target Price ကို ပြင်ဆင်ပြီးပါပြီ!* 🎯\n\n` +
-      getOrderDetailMessage(updatedOrder, currentPrice),
-    {
-      parse_mode: 'Markdown',
-      reply_markup: getOrderDetailKeyboard(updatedOrder),
-    }
-  );
+  await ctx.reply(t.order_updated, {
+    parse_mode: 'Markdown',
+    reply_markup: getOrderDetailKeyboard(updatedOrder, lang),
+  });
 }
 
 /**
@@ -1087,50 +1012,34 @@ export async function editOrderAmountConversation(
   const userId = ctx.from?.id;
   if (!userId) return;
 
+  const lang = getUserLanguage(userId);
+  const t = getT(lang);
+
   const state = getUserTradeState(userId);
   const orderId = state?.editingOrderId;
 
   if (!orderId) {
-    await ctx.reply('❌ ပြင်ဆင်မည့် Order ကို ရှာမတွေ့ပါ။', {
-      reply_markup: new InlineKeyboard().text('📋 All Orders', 'menu:orders'),
+    await ctx.reply('❌ Order not found.', {
+      reply_markup: new InlineKeyboard().text(t.btn_orders, 'menu:orders'),
     });
     return;
   }
 
   const order = getLimitOrderById(userId, orderId);
   if (!order || order.status !== 'PENDING') {
-    await ctx.reply('❌ ဤ Order သည် ပယ်ဖျက်ပြီး သို့မဟုတ် အလုပ်လုပ်ပြီးဖြစ်ပါသည်။', {
-      reply_markup: new InlineKeyboard().text('📋 All Orders', 'menu:orders'),
+    await ctx.reply('❌ Order is no longer pending or has been removed.', {
+      reply_markup: new InlineKeyboard().text(t.btn_orders, 'menu:orders'),
     });
     return;
   }
 
-  const token = await fetchTokenInfo(order.token_address);
-  const currentPrice = token?.priceUsd || order.target_price_usd;
-
-  let promptText = '';
-  if (order.order_type === 'BUY_LIMIT') {
-    promptText =
-      `✏️ *Edit Buy Amount - Order #${order.id}*\n\n` +
-      `🪙 *Token:* $${order.token_symbol}\n` +
-      `💵 *Current Amount:* \`${order.amount_sol} SOL\`\n\n` +
-      `ဝယ်ယူမည့် *SOL ပမာဏ အသစ်* ကို ရိုက်ထည့်ပေးပါ:\n` +
-      `ဥပမာ: \`0.5\` သို့မဟုတ် \`1.5\``;
-  } else {
-    promptText =
-      `✏️ *Edit Sell Amount - Order #${order.id}*\n\n` +
-      `🪙 *Token:* $${order.token_symbol}\n` +
-      `📦 *Current Amount:* \`${order.amount_percent}%\`\n\n` +
-      `ရောင်းချမည့် *ရာခိုင်နှုန်း (%) အသစ်* ကို ရိုက်ထည့်ပေးပါ (1 မှ 100 အထိ):\n` +
-      `ဥပမာ: \`50\` သို့မဟုတ် \`100\``;
-  }
-
-  const promptMsg = await ctx.reply(promptText, {
+  const currentAmt = order.order_type === 'BUY_LIMIT' ? `${order.amount_sol} SOL` : `${order.amount_percent}%`;
+  const promptMsg = await ctx.reply(t.prompt_edit_amount(order.id, currentAmt), {
     parse_mode: 'Markdown',
     reply_markup: new InlineKeyboard()
-      .text('❌ Cancel', `order:view:${order.id}`)
+      .text(t.btn_cancel, `order:view:${order.id}`)
       .row()
-      .text('📋 All Orders', 'menu:orders'),
+      .text(t.btn_back_orders, 'menu:orders'),
   });
 
   const res = await waitForInputOrCancel(conversation, ctx);
@@ -1144,14 +1053,14 @@ export async function editOrderAmountConversation(
   if (order.order_type === 'BUY_LIMIT') {
     const sol = parseFloat(res.text.trim());
     if (isNaN(sol) || sol <= 0) {
-      await ctx.reply('❌ မမှန်ကန်သော SOL ပမာဏဖြစ်ပါသည်။');
+      await ctx.reply(t.invalid_input_err);
       return;
     }
     updateLimitOrderDetails(userId, order.id, { amountSol: sol });
   } else {
     const pct = parseFloat(res.text.trim().replace('%', ''));
     if (isNaN(pct) || pct <= 0 || pct > 100) {
-      await ctx.reply('❌ မမှန်ကန်သော ရာခိုင်နှုန်းဖြစ်ပါသည်။ 1 မှ 100 ကြား ထည့်ပေးပါ။');
+      await ctx.reply(t.invalid_input_err);
       return;
     }
     updateLimitOrderDetails(userId, order.id, { amountPercent: pct });
@@ -1160,14 +1069,10 @@ export async function editOrderAmountConversation(
   const updatedOrder = getLimitOrderById(userId, order.id);
   if (!updatedOrder) return;
 
-  await ctx.reply(
-    `✅ *Order #${order.id} ၏ ပမာဏကို ပြင်ဆင်ပြီးပါပြီ!* 📦\n\n` +
-      getOrderDetailMessage(updatedOrder, currentPrice),
-    {
-      parse_mode: 'Markdown',
-      reply_markup: getOrderDetailKeyboard(updatedOrder),
-    }
-  );
+  await ctx.reply(t.order_updated, {
+    parse_mode: 'Markdown',
+    reply_markup: getOrderDetailKeyboard(updatedOrder, lang),
+  });
 }
 
 /**
@@ -1181,17 +1086,13 @@ export async function customSlippageConversation(
   if (!userId) return;
 
   const userLang = getUserLanguage(userId);
-  const isEn = userLang === 'en';
+  const t = getT(userLang);
+  const settings = getUserSettings(userId);
 
-  const promptMsg = await ctx.reply(
-    `⚡ *${isEn ? 'Custom Slippage Percentage' : 'စိတ်ကြိုက် Slippage ရာခိုင်နှုန်း (%)'}*\n\n` +
-      `${isEn ? 'Enter your desired slippage percentage (e.g. 2.5, 7, 15):' : 'အသုံးပြုလိုသော Slippage ရာခိုင်နှုန်းကို ရိုက်ထည့်ပေးပါ (ဥပမာ: 2.5, 7, 15):'}\n\n` +
-      `_Min: 0.1%, Max: 50%_`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard().text('❌ Cancel', 'menu:settings'),
-    }
-  );
+  const promptMsg = await ctx.reply(t.prompt_custom_slippage(settings.slippage_bps / 100), {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard().text(t.btn_cancel, 'menu:settings'),
+  });
 
   const res = await waitForInputOrCancel(conversation, ctx);
   if (res.isCancelled || !res.text) {
@@ -1203,26 +1104,19 @@ export async function customSlippageConversation(
 
   const slip = parseFloat(res.text.trim().replace('%', ''));
   if (isNaN(slip) || slip <= 0 || slip > 50) {
-    await ctx.reply(
-      isEn
-        ? '❌ Invalid slippage. Must be between 0.1% and 50%.'
-        : '❌ မမှန်ကန်သော Slippage ဖြစ်ပါသည်။ 0.1% မှ 50% ကြား ထည့်ပေးပါ။'
-    );
+    await ctx.reply(t.invalid_input_err);
     return;
   }
 
   const bps = Math.round(slip * 100);
   updateUserSettings(userId, bps);
-  const settings = getUserSettings(userId);
+  const updatedSettings = getUserSettings(userId);
 
   await ctx.reply(
-    `✅ *${isEn ? `Slippage set to ${slip}%!` : `Slippage ကို ${slip}% သို့ ပြောင်းလဲပြီးပါပြီ!`}* ⚡\n\n` +
-      getSettingsMessage(settings, userLang),
+    `${t.slippage_updated(slip)}\n\n` + getSettingsMessage(updatedSettings, userLang),
     {
       parse_mode: 'Markdown',
-      reply_markup: getSettingsKeyboard(settings, userLang),
+      reply_markup: getSettingsKeyboard(updatedSettings, userLang),
     }
   );
 }
-
-
