@@ -1,13 +1,13 @@
-# ⚡ MYANBOT AI - Solana 0% Fee Telegram Trading Bot
+# ⚡ UPBOT AI - Solana 0% Fee Telegram Trading Bot & Web Terminal
 
-> **Official Website:** [myanbot.ai](https://myanbot.ai/)
-> **A high-speed, self-hosted Solana Telegram trading bot with 0% fees, Limit Orders (Dip Buy, Take Profit, Stop Loss), Portfolio Tracking, and AES-256 Military-Grade Encryption.**
+> **Official Website:** [upbotai.app](https://upbotai.app/)
+> **A high-speed, self-hosted Solana Telegram trading bot with 0% fees, Limit Orders (Dip Buy, Take Profit, Stop Loss), Web Dashboard, Portfolio Tracking, and AES-256 Military-Grade Encryption.**
 
 ---
 
 ## 🌟 Key Features
 
-* **⚡ 0% Trading Fee (No Dev Cut):** Unlike Trojan (1%), BonkBot (1%), or Maestro (1%), MYANBOT AI executes direct Jupiter V6 swaps with zero developer fee.
+* **⚡ 0% Trading Fee (No Dev Cut):** Unlike Trojan (1%), BonkBot (1%), or Maestro (1%), UPBOT AI executes direct Jupiter V6 swaps with zero developer fee.
 * **⏱️ Full Limit Order Engine:**
   * **Buy the Dip:** Auto-buy when token drops by -5%, -10%, -20%, or custom target price.
   * **Take Profit (TP) & Stop Loss (SL):** Auto-sell when target gain (+25%, +50%, 2x) or stop-loss limit is reached.
@@ -15,6 +15,8 @@
 * **💼 Token Portfolio / Positions Tracker:**
   * Real-time SPL token holdings scan with live USD valuations.
   * 1-Click Quick Sell / Trade directly from the portfolio view.
+* **🖥️ Web Trading Terminal & Browser Extension:**
+  * Embedded live TradingView chart, multi-wallet switcher, Slippage Bar (1%, 2%, 5%, 10%, 20%, Custom), and Phantom/Solflare extension support.
 * **🚀 Turbo Swap Engine:**
   * Dynamic Priority Fees (`Standard`, `High`, `Turbo`).
   * 400ms Leader Rebroadcasting loop & 300ms signature polling to prevent expired transactions.
@@ -22,7 +24,7 @@
   * **English 🇺🇸** (Default)
   * **Myanmar / Burmese 🇲🇲** (Switchable in 1 click)
 * **🛡️ Military-Grade Security & Privacy:**
-  * 100% Non-Custodial: Private keys are stored exclusively in your local SQLite database (`myanbot.db`).
+  * 100% Non-Custodial: Private keys are stored exclusively in your local SQLite database (`upbot.db`).
   * **AES-256-GCM Encryption:** Keys are encrypted with a user-defined secret key.
   * **Admin Whitelist Lock:** Restricts Telegram access strictly to authorized usernames or user IDs.
 * **🖱️ 1-Click Launchers:** Ready-to-use `start-bot.bat` (Windows) and `start-bot.sh` (Linux/macOS).
@@ -37,8 +39,8 @@
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/kstorytellercreator-netizen/MYANBOT.git
-cd MYANBOT
+git clone https://github.com/upbotguy/QuickBot.git
+cd QuickBot
 ```
 
 ### 2. Configure Environment Variables
@@ -97,7 +99,7 @@ ADMIN_USERNAMES=your_telegram_username
 ---
 
 ## 🔒 Security & Privacy Notice
-MYANBOT AI is 100% self-hosted and non-custodial. Your keys never leave your device. As a standard crypto safety best practice, always use a dedicated trading sub-wallet with only the funds you intend to trade.
+UPBOT AI is 100% self-hosted and non-custodial. Your keys never leave your device. As a standard crypto safety best practice, always use a dedicated trading sub-wallet with only the funds you intend to trade.
 
 ---
 
