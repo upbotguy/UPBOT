@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 echo "==================================================="
-echo "   MYANBOT AI - Solana Sniper & Limit Trading Bot"
+echo "   UPBOT AI - Solana Sniper & Limit Trading Bot"
 echo "                 0% Fee Direct Swap"
 echo "==================================================="
 echo ""
@@ -28,14 +28,17 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 
-# Build project
-echo "[INFO] Building MYANBOT AI..."
+# Build project & sync web assets
+echo "[INFO] Building UPBOT AI..."
 npm run build
+mkdir -p dist/server/public
+cp -r src/server/public/* dist/server/public/ 2>/dev/null || true
 
 # Start bot
 echo ""
-echo "[INFO] Starting MYANBOT AI..."
+echo "[INFO] Starting UPBOT AI..."
 echo "==================================================="
+echo "Web Dashboard: http://localhost:3000"
 echo "Press Ctrl+C anytime to stop."
 echo "==================================================="
 echo ""

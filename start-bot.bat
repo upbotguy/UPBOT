@@ -1,10 +1,10 @@
 @echo off
-title MYANBOT AI - Solana 0% Fee Trading Bot
+title UPBOT AI - Solana 0% Fee Trading Bot
 color 0A
 
 echo ===================================================
-echo     MYANBOT AI - Solana Sniper & Limit Trading Bot
-echo                  0% Fee Direct Swap
+echo      UPBOT AI - Solana Sniper & Limit Trading Bot
+echo                   0% Fee Direct Swap
 echo ===================================================
 echo.
 
@@ -40,8 +40,8 @@ if not exist node_modules (
     echo.
 )
 
-:: Build TypeScript code
-echo [INFO] Building MYANBOT AI...
+:: Build TypeScript code & sync web assets
+echo [INFO] Building UPBOT AI...
 call npm run build
 if %errorlevel% neq 0 (
     echo [ERROR] Build failed! Check errors above.
@@ -49,10 +49,17 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+:: Ensure public assets exist in dist
+if exist src\server\public (
+    if not exist dist\server\public mkdir dist\server\public
+    xcopy /E /I /Y src\server\public dist\server\public >nul 2>&1
+)
+
 :: Start the bot
 echo.
-echo [INFO] Starting MYANBOT AI Telegram Engine...
+echo [INFO] Starting UPBOT AI Telegram & Web Engine...
 echo ===================================================
+echo Web Dashboard: http://localhost:3000
 echo Press Ctrl+C anytime to stop the bot.
 echo ===================================================
 echo.
