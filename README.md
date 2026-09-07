@@ -84,20 +84,6 @@ ADMIN_USERNAMES=your_telegram_username
 
 ---
 
-## 🇲🇲 မြန်မာဘာသာ အသုံးပြုနည်းလမ်းညွှန်
-
-### အဓိက အားသာချက်များ
-1. **Trading Fee ဝယ်/ရောင်းတိုင်း ၀% (အခမဲ့):** အခြား Bot များကဲ့သို့ ၁% Fee ဖြတ်ယူခြင်း လုံးဝ မရှိပါ။
-2. **Limit Orders စနစ်:** Token စျေးကျချိန် အလိုအလျောက် ဝယ်ယူခြင်း (Dip Buy) နှင့် အမြတ်ယူ/အရှုံးကာကွယ်ခြင်း (TP/SL) အပြည့်အစုံ ပါဝင်ပါသည်။
-3. **Portfolio Tracker:** မိမိ Wallet ထဲရှိ Token များ၏ စုစုပေါင်း USD တန်ဖိုးကို ကြည့်ရှုနိုင်ပြီး ချက်ချင်း ရောင်းချနိုင်ပါသည်။
-4. **စစ်တပ်အဆင့် လုံခြုံရေး:** Private Key များကို AES-256-GCM ဖြင့် လျှို့ဝှက်ကုဒ်ပြောင်းပြီး သင့်စက်တွင်း၌သာ သိမ်းဆည်းပါသည်။
-
-### အသုံးပြုရန် အဆင့်များ
-1. Windows တွင် **`start-bot.bat`** ကို Double Click နှိပ်၍ Bot ကို ဖွင့်ပါ။
-2. Telegram တွင် `/start` နှိပ်ပါ။ **`🌐 Language`** မှတစ်ဆင့် **`🇲🇲 မြန်မာစာ`** သို့ ပြောင်းလဲနိုင်ပါသည်။
-
----
-
 ## 🔒 Security & Privacy Notice
 UPBOT AI is 100% self-hosted and non-custodial. Your keys never leave your device. As a standard crypto safety best practice, always use a dedicated trading sub-wallet with only the funds you intend to trade.
 
