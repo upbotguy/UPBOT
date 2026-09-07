@@ -39,8 +39,8 @@
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/upbotguy/QuickBot.git
-cd QuickBot
+git clone https://github.com/upbotguy/UPBOT.git
+cd UPBOT
 ```
 
 ### 2. Configure Environment Variables
