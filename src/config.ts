@@ -4,10 +4,10 @@ import path from 'path';
 dotenv.config();
 
 export const CONFIG = {
-  BOT_TOKEN: process.env.BOT_TOKEN || '8696106370:AAFp5JRE6xxKPGTL7ecM4V3hbnB_3fI-nQM',
+  BOT_TOKEN: process.env.BOT_TOKEN || '',
   SOLANA_RPC_URL: process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
-  ENCRYPTION_KEY: process.env.ENCRYPTION_KEY || '9f8a3c2e1b4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f',
-  DATABASE_PATH: process.env.DATABASE_PATH || './quickbot.db',
+  ENCRYPTION_KEY: process.env.ENCRYPTION_KEY || '',
+  DATABASE_PATH: process.env.DATABASE_PATH || './upbot.db',
   ADMIN_USER_IDS: (process.env.ADMIN_USER_IDS || '')
     .split(',')
     .map((s) => s.trim())

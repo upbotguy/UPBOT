@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { CONFIG } from '../config.js';
 
 // Derive 32-byte key from config string
-const ENCRYPTION_KEY = crypto.createHash('sha256').update(CONFIG.ENCRYPTION_KEY).digest();
+const ENCRYPTION_KEY = crypto.createHash('sha256').update(CONFIG.ENCRYPTION_KEY || 'upbot_default_local_encryption_key_v1').digest();
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // Standard for GCM
 const AUTH_TAG_LENGTH = 16;

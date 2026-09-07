@@ -82,7 +82,7 @@ import { getT, SupportedLanguage } from './i18n/index.js';
 initDB();
 
 // Initialize Bot
-const bot = new Bot<MyContext>(CONFIG.BOT_TOKEN);
+const bot = new Bot<MyContext>(CONFIG.BOT_TOKEN || '0000000000:AA_placeholder_for_standalone_web_mode');
 
 // Admin Whitelist Security Middleware
 bot.use(async (ctx, next) => {
@@ -1269,10 +1269,15 @@ bot.catch((err) => {
   console.error('[Bot Error]', err);
 });
 
-// Launch Bot
-console.log('🤖 UPBOT AI is starting...');
-bot.start({
-  onStart: (botInfo) => {
-    console.log(`✅ UPBOT AI started successfully as @${botInfo.username}`);
-  },
-});
+// Launch Telegram Bot if token configured
+if (CONFIG.BOT_TOKEN && CONFIG.BOT_TOKEN.trim() !== '') {
+  console.log('🤖 UPBOT AI Telegram bot is starting...');
+  bot.start({
+    onStart: (botInfo) => {
+      console.log(`✅ UPBOT AI Telegram bot started successfully as @${botInfo.username}`);
+    },
+  });
+} else {
+  console.log(`ℹ️ Telegram BOT_TOKEN is not configured in .env.`);
+  console.log(`🚀 UPBOT AI is running in Standalone Web Terminal Mode: http://localhost:${CONFIG.PORT}`);
+}
