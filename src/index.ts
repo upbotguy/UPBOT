@@ -19,6 +19,13 @@ import {
   cancelLimitOrder,
   deleteLimitOrder,
   getUserTokenPosition,
+  getUserCopyTargets,
+  getCopyTargetById,
+  toggleCopyTargetStatus,
+  deleteCopyTarget,
+  getUserDcaOrders,
+  getUserTrailingOrders,
+  getSniperRule,
 } from './db/index.js';
 import {
   getSolBalance,
@@ -38,6 +45,8 @@ import {
   getOrdersListMessage,
   getOrderDetailMessage,
   getPortfolioMessage,
+  getCopyMenuMessage,
+  getCopyTargetDetailMessage,
 } from './bot/messages.js';
 import {
   getMainMenuKeyboard,
@@ -56,6 +65,8 @@ import {
   getLanguageKeyboard,
   getLimitBuyOptionsKeyboard,
   getLimitSellOptionsKeyboard,
+  getCopyMenuKeyboard,
+  getCopyTargetDetailKeyboard,
 } from './bot/keyboards.js';
 import {
   MyContext,
@@ -68,6 +79,7 @@ import {
   editOrderPriceConversation,
   editOrderAmountConversation,
   customSlippageConversation,
+  addCopyTargetConversation,
   executeBuyFlow,
   executeSellFlow,
   setUserTradeState,
@@ -75,6 +87,10 @@ import {
   extractTokenAddressFromContext,
 } from './bot/conversations.js';
 import { startOrderEngine } from './services/orderEngine.js';
+import { startCopyEngine } from './services/copyEngine.js';
+import { startDcaEngine } from './services/dcaEngine.js';
+import { startTrailingEngine } from './services/trailingEngine.js';
+import { startSniperEngine } from './services/sniperEngine.js';
 import { startWebServer } from './server/app.js';
 import { getT, SupportedLanguage } from './i18n/index.js';
 
@@ -140,6 +156,7 @@ bot.use(createConversation(limitSellConversation));
 bot.use(createConversation(editOrderPriceConversation));
 bot.use(createConversation(editOrderAmountConversation));
 bot.use(createConversation(customSlippageConversation));
+bot.use(createConversation(addCopyTargetConversation));
 
 /**
  * Handle /start command
@@ -164,6 +181,346 @@ bot.command('start', async (ctx) => {
     parse_mode: 'Markdown',
     reply_markup: getMainMenuKeyboard(lang),
   });
+});
+
+/**
+ * Handle /copy command
+ */
+bot.command('copy', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  getOrCreateUser(userId, ctx.from?.username, ctx.from?.first_name);
+  const lang = getUserLanguage(userId);
+  const targets = getUserCopyTargets(userId);
+
+  const message = getCopyMenuMessage(targets, lang);
+  await ctx.reply(message, {
+    parse_mode: 'Markdown',
+    reply_markup: getCopyMenuKeyboard(targets, lang),
+  });
+});
+
+/**
+ * Handle /orders command
+ */
+bot.command('orders', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  getOrCreateUser(userId, ctx.from?.username, ctx.from?.first_name);
+  const lang = getUserLanguage(userId);
+  const orders = getUserLimitOrders(userId);
+  const message = getOrdersListMessage(orders, lang);
+  const keyboard = getOrdersKeyboard(orders, lang);
+  await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: keyboard });
+});
+
+/**
+ * Handle /dca command
+ */
+bot.command('dca', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  getOrCreateUser(userId, ctx.from?.username, ctx.from?.first_name);
+  const dcaOrders = getUserDcaOrders(userId);
+
+  let msg = `🔁 *Automated DCA Strategies*\n\n`;
+  if (dcaOrders.length === 0) {
+    msg += `No active DCA strategies.\n\n_Configure automated Dollar-Cost Averaging schedules via the Web Terminal at_ \`http://localhost:8926\` _or open DCA settings._`;
+  } else {
+    msg += `Active & Scheduled DCA Orders (${dcaOrders.length}):\n\n`;
+    dcaOrders.forEach((o, i) => {
+      const statusIcon = o.is_active ? '🟢 ACTIVE' : '⏸️ PAUSED';
+      msg += `*${i + 1}.* \`${formatAddress(o.token_address, 4)}\`\n`;
+      msg += `   • Amount: *${o.amount_sol} SOL* | Interval: *${o.interval_hours}h*\n`;
+      msg += `   • Cycles: *${o.executed_cycles}/${o.total_cycles || '∞'}* | Status: *${statusIcon}*\n\n`;
+    });
+    msg += `_Manage in real-time on Web Terminal Pro._`;
+  }
+  await ctx.reply(msg, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🔄 Refresh DCA', callback_data: 'menu:dca_refresh' }],
+        [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+      ],
+    },
+  });
+});
+
+bot.callbackQuery('menu:dca_refresh', async (ctx) => {
+  ctx.answerCallbackQuery({ text: '🔄 Refreshed DCA!' }).catch(() => {});
+  const userId = ctx.from.id;
+  const dcaOrders = getUserDcaOrders(userId);
+  let msg = `🔁 *Automated DCA Strategies*\n\n`;
+  if (dcaOrders.length === 0) {
+    msg += `No active DCA strategies.\n\n_Configure automated Dollar-Cost Averaging schedules via the Web Terminal at_ \`http://localhost:8926\` _or open DCA settings._`;
+  } else {
+    msg += `Active & Scheduled DCA Orders (${dcaOrders.length}):\n\n`;
+    dcaOrders.forEach((o, i) => {
+      const statusIcon = o.is_active ? '🟢 ACTIVE' : '⏸️ PAUSED';
+      msg += `*${i + 1}.* \`${formatAddress(o.token_address, 4)}\`\n`;
+      msg += `   • Amount: *${o.amount_sol} SOL* | Interval: *${o.interval_hours}h*\n`;
+      msg += `   • Cycles: *${o.executed_cycles}/${o.total_cycles || '∞'}* | Status: *${statusIcon}*\n\n`;
+    });
+    msg += `_Manage in real-time on Web Terminal Pro._`;
+  }
+  try {
+    await ctx.editMessageText(msg, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔄 Refresh DCA', callback_data: 'menu:dca_refresh' }],
+          [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+        ],
+      },
+    });
+  } catch {}
+});
+
+/**
+ * Handle /trailing command
+ */
+bot.command('trailing', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  getOrCreateUser(userId, ctx.from?.username, ctx.from?.first_name);
+  const trailingOrders = getUserTrailingOrders(userId);
+
+  let msg = `📉 *Dynamic Trailing Stop-Loss Orders*\n\n`;
+  if (trailingOrders.length === 0) {
+    msg += `No active Trailing SL orders.\n\n_Lock in maximum profit & auto-trail peak highs via Web Terminal Pro._`;
+  } else {
+    msg += `Active Trailing SL Orders (${trailingOrders.length}):\n\n`;
+    trailingOrders.forEach((o, i) => {
+      const peak = o.highest_price_usd > 0 ? `$${o.highest_price_usd.toFixed(6)}` : 'Tracking...';
+      msg += `*${i + 1}.* \`${formatAddress(o.token_address, 4)}\`\n`;
+      msg += `   • Trail Drop: *-${o.trailing_pct}%* | Sell: *${o.amount_percent}%*\n`;
+      msg += `   • Peak High: *${peak}*\n\n`;
+    });
+    msg += `_Engine checks price movement every 8 seconds._`;
+  }
+  await ctx.reply(msg, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🔄 Refresh Trailing SL', callback_data: 'menu:trailing_refresh' }],
+        [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+      ],
+    },
+  });
+});
+
+bot.callbackQuery('menu:trailing_refresh', async (ctx) => {
+  ctx.answerCallbackQuery({ text: '🔄 Refreshed Trailing SL!' }).catch(() => {});
+  const userId = ctx.from.id;
+  const trailingOrders = getUserTrailingOrders(userId);
+
+  let msg = `📉 *Dynamic Trailing Stop-Loss Orders*\n\n`;
+  if (trailingOrders.length === 0) {
+    msg += `No active Trailing SL orders.\n\n_Lock in maximum profit & auto-trail peak highs via Web Terminal Pro._`;
+  } else {
+    msg += `Active Trailing SL Orders (${trailingOrders.length}):\n\n`;
+    trailingOrders.forEach((o, i) => {
+      const peak = o.highest_price_usd > 0 ? `$${o.highest_price_usd.toFixed(6)}` : 'Tracking...';
+      msg += `*${i + 1}.* \`${formatAddress(o.token_address, 4)}\`\n`;
+      msg += `   • Trail Drop: *-${o.trailing_pct}%* | Sell: *${o.amount_percent}%*\n`;
+      msg += `   • Peak High: *${peak}*\n\n`;
+    });
+    msg += `_Engine checks price movement every 8 seconds._`;
+  }
+  try {
+    await ctx.editMessageText(msg, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔄 Refresh Trailing SL', callback_data: 'menu:trailing_refresh' }],
+          [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+        ],
+      },
+    });
+  } catch {}
+});
+
+/**
+ * Handle /sniper command
+ */
+bot.command('sniper', async (ctx) => {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  getOrCreateUser(userId, ctx.from?.username, ctx.from?.first_name);
+  const rule = getSniperRule(userId);
+
+  const statusText = rule.is_active ? '🟢 ACTIVE (Auto-Sniping)' : '⏸️ DISABLED';
+  let msg = `🎯 *Token Launch Sniper Engine*\n\n`;
+  msg += `• *Status:* ${statusText}\n`;
+  msg += `• *Buy Amount:* \`${rule.buy_amount_sol} SOL\`\n`;
+  msg += `• *Anti-Rug Filter:* \`${rule.rug_filter ? 'ENABLED' : 'DISABLED'}\`\n`;
+  msg += `• *Min Liquidity:* \`$${rule.min_liquidity_usd}\`\n`;
+  msg += `• *Max Liquidity:* \`$${rule.max_liquidity_usd}\`\n`;
+  msg += `• *Auto Take Profit:* \`${rule.take_profit_pct ? '+' + rule.take_profit_pct + '%' : 'Disabled'}\`\n`;
+  msg += `• *Auto Stop Loss:* \`${rule.stop_loss_pct ? '-' + rule.stop_loss_pct + '%' : 'Disabled'}\`\n\n`;
+  msg += `_Configure live sniper parameters directly in Web Terminal Pro._`;
+
+  await ctx.reply(msg, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '🔄 Refresh Sniper Status', callback_data: 'menu:sniper_refresh' }],
+        [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+      ],
+    },
+  });
+});
+
+bot.callbackQuery('menu:sniper_refresh', async (ctx) => {
+  ctx.answerCallbackQuery({ text: '🔄 Refreshed Sniper Status!' }).catch(() => {});
+  const userId = ctx.from.id;
+  const rule = getSniperRule(userId);
+
+  const statusText = rule.is_active ? '🟢 ACTIVE (Auto-Sniping)' : '⏸️ DISABLED';
+  let msg = `🎯 *Token Launch Sniper Engine*\n\n`;
+  msg += `• *Status:* ${statusText}\n`;
+  msg += `• *Buy Amount:* \`${rule.buy_amount_sol} SOL\`\n`;
+  msg += `• *Anti-Rug Filter:* \`${rule.rug_filter ? 'ENABLED' : 'DISABLED'}\`\n`;
+  msg += `• *Min Liquidity:* \`$${rule.min_liquidity_usd}\`\n`;
+  msg += `• *Max Liquidity:* \`$${rule.max_liquidity_usd}\`\n`;
+  msg += `• *Auto Take Profit:* \`${rule.take_profit_pct ? '+' + rule.take_profit_pct + '%' : 'Disabled'}\`\n`;
+  msg += `• *Auto Stop Loss:* \`${rule.stop_loss_pct ? '-' + rule.stop_loss_pct + '%' : 'Disabled'}\`\n\n`;
+  msg += `_Configure live sniper parameters directly in Web Terminal Pro._`;
+
+  try {
+    await ctx.editMessageText(msg, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔄 Refresh Sniper Status', callback_data: 'menu:sniper_refresh' }],
+          [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+        ],
+      },
+    });
+  } catch {}
+});
+
+/**
+ * Menu: Copy Trading Hub
+ */
+bot.callbackQuery('menu:copy', async (ctx) => {
+  ctx.answerCallbackQuery().catch(() => {});
+  const userId = ctx.from.id;
+  getOrCreateUser(userId, ctx.from.username, ctx.from.first_name);
+  const lang = getUserLanguage(userId);
+  const targets = getUserCopyTargets(userId);
+
+  const message = getCopyMenuMessage(targets, lang);
+  try {
+    await ctx.editMessageText(message, {
+      parse_mode: 'Markdown',
+      reply_markup: getCopyMenuKeyboard(targets, lang),
+    });
+  } catch {
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: getCopyMenuKeyboard(targets, lang),
+    });
+  }
+});
+
+/**
+ * Add Copy Target Trigger
+ */
+bot.callbackQuery('copy:add', async (ctx) => {
+  await ctx.answerCallbackQuery().catch(() => {});
+  await ctx.conversation.enter('addCopyTargetConversation');
+});
+
+/**
+ * View Single Copy Target Details
+ */
+bot.callbackQuery(/^copy:view:([0-9]+)$/, async (ctx) => {
+  ctx.answerCallbackQuery().catch(() => {});
+  const targetId = parseInt(ctx.match[1], 10);
+  const userId = ctx.from.id;
+  const lang = getUserLanguage(userId);
+
+  const target = getCopyTargetById(userId, targetId);
+  if (!target) {
+    await ctx.reply('❌ Copy target not found.', {
+      reply_markup: { inline_keyboard: [[{ text: '👥 Copy Trading', callback_data: 'menu:copy' }]] },
+    });
+    return;
+  }
+
+  const message = getCopyTargetDetailMessage(target, lang);
+  try {
+    await ctx.editMessageText(message, {
+      parse_mode: 'Markdown',
+      reply_markup: getCopyTargetDetailKeyboard(target, lang),
+    });
+  } catch {
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: getCopyTargetDetailKeyboard(target, lang),
+    });
+  }
+});
+
+/**
+ * Toggle Copy Target Active/Pause
+ */
+bot.callbackQuery(/^copy:toggle:([0-9]+)$/, async (ctx) => {
+  const targetId = parseInt(ctx.match[1], 10);
+  const userId = ctx.from.id;
+  const lang = getUserLanguage(userId);
+
+  const success = toggleCopyTargetStatus(userId, targetId);
+  if (success) {
+    const updated = getCopyTargetById(userId, targetId);
+    const statusText = updated?.is_active === 1 ? '🟢 Resumed monitoring!' : '⏸️ Paused monitoring!';
+    ctx.answerCallbackQuery({ text: statusText }).catch(() => {});
+
+    if (updated) {
+      const message = getCopyTargetDetailMessage(updated, lang);
+      try {
+        await ctx.editMessageText(message, {
+          parse_mode: 'Markdown',
+          reply_markup: getCopyTargetDetailKeyboard(updated, lang),
+        });
+      } catch {}
+    }
+  } else {
+    ctx.answerCallbackQuery({ text: '❌ Failed to toggle target' }).catch(() => {});
+  }
+});
+
+/**
+ * Delete Copy Target
+ */
+bot.callbackQuery(/^copy:delete:([0-9]+)$/, async (ctx) => {
+  const targetId = parseInt(ctx.match[1], 10);
+  const userId = ctx.from.id;
+  const lang = getUserLanguage(userId);
+
+  const success = deleteCopyTarget(userId, targetId);
+  if (success) {
+    ctx.answerCallbackQuery({ text: `🗑️ Target #${targetId} deleted!` }).catch(() => {});
+  } else {
+    ctx.answerCallbackQuery({ text: '❌ Failed to delete target' }).catch(() => {});
+  }
+
+  const targets = getUserCopyTargets(userId);
+  const message = getCopyMenuMessage(targets, lang);
+  try {
+    await ctx.editMessageText(message, {
+      parse_mode: 'Markdown',
+      reply_markup: getCopyMenuKeyboard(targets, lang),
+    });
+  } catch {
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: getCopyMenuKeyboard(targets, lang),
+    });
+  }
 });
 
 /**
@@ -257,11 +614,11 @@ bot.callbackQuery(/^lang:set:(en|zh|ru|ko|es|my)$/, async (ctx) => {
 
   const langNames: Record<SupportedLanguage, string> = {
     en: 'English 🇺🇸',
-    zh: '简体中文 🇨🇳',
-    ru: 'Русский 🇷🇺',
-    ko: '한국어 🇰🇷',
-    es: 'Español 🇪🇸',
-    my: 'မြန်မာစာ 🇲🇲',
+    zh: 'Chinese 🇨🇳',
+    ru: 'Russian 🇷🇺',
+    ko: 'Korean 🇰🇷',
+    es: 'Spanish 🇪🇸',
+    my: 'Burmese 🇲🇲',
   };
   const langName = langNames[newLang] || 'English 🇺🇸';
   ctx.answerCallbackQuery({ text: `Language changed to ${langName}!` }).catch(() => {});
@@ -1256,8 +1613,12 @@ bot.on('message:text', async (ctx) => {
   }
 });
 
-// Start Background Limit Order Engine
+// Start Background Trading & Automation Engines
 startOrderEngine(bot);
+startCopyEngine(bot);
+startDcaEngine();
+startTrailingEngine();
+startSniperEngine();
 
 // Start Web Trading Terminal if enabled
 if (CONFIG.ENABLE_WEB_UI) {

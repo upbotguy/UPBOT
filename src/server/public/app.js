@@ -26,6 +26,40 @@ let extWallet = {
   tokenBalance: { amount: '0', decimals: 6, uiAmount: 0 }
 };
 
+// Copy to Clipboard Utility
+function copyToClipboard(text, label = 'Address') {
+  if (!text) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        showToast(`Copied ${label}: ${text.slice(0, 4)}...${text.slice(-4)}`, 'success');
+      })
+      .catch(() => {
+        fallbackCopyText(text, label);
+      });
+  } else {
+    fallbackCopyText(text, label);
+  }
+}
+window.copyToClipboard = copyToClipboard;
+
+function fallbackCopyText(text, label) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    showToast(`Copied ${label}: ${text.slice(0, 4)}...${text.slice(-4)}`, 'success');
+  } catch (err) {
+    showToast('Failed to copy to clipboard', 'error');
+  }
+  document.body.removeChild(ta);
+}
+
 // Safe JSON Fetch Helper (Prevents "Unexpected end of JSON" errors)
 async function safeFetchJson(url, options = {}) {
   try {
@@ -86,6 +120,8 @@ function initTerminal() {
   loadPortfolio();
   loadOrders();
   loadHistory();
+  loadCopyTargets();
+  loadCopyHistory();
   updateWatchlistPrices();
 
   // 3. Start background live polling
@@ -166,7 +202,7 @@ function promptAddFavorite() {
       saveFavorites(favs);
       renderWatchlistBar();
       updateFavButtonState();
-      showToast(`⭐ Added $${sym} to Watchlist!`, 'success');
+      showToast(`Added $${sym} to Watchlist!`, 'success');
     });
   }
 }
@@ -184,7 +220,7 @@ function toggleFavorite(address, symbol = 'TOKEN') {
     const price = currentTokenData?.priceUsd || 0;
     const change = currentTokenData?.priceChange24h || 0;
     favs.push({ address, symbol: tokenSymbol, priceUsd: price, change24h: change });
-    showToast(`⭐ Added $${tokenSymbol} to Watchlist!`, 'success');
+    showToast(`Added $${tokenSymbol} to Watchlist!`, 'success');
   }
 
   saveFavorites(favs);
@@ -198,7 +234,7 @@ function renderWatchlistBar() {
 
   const favs = getFavorites();
   if (favs.length === 0) {
-    container.innerHTML = `<span style="font-size:11px;color:#777;">No favorites starred yet. Click ⭐ to add.</span>`;
+    container.innerHTML = `<span style="font-size:11px;color:#777;">No favorites starred yet. Click to add.</span>`;
     return;
   }
 
@@ -214,7 +250,7 @@ function renderWatchlistBar() {
           <span class="fav-chip-sym">$${item.symbol}</span>
           ${priceStr ? `<span class="fav-chip-price">${priceStr}</span>` : ''}
           ${chgStr ? `<span class="fav-chip-change ${chgClass}">${chgStr}</span>` : ''}
-          <span class="fav-chip-remove" onclick="event.stopPropagation(); removeFavoriteItem('${item.address}', '${item.symbol}')" title="Remove from Watchlist">✕</span>
+          <span class="fav-chip-remove" onclick="event.stopPropagation(); removeFavoriteItem('${item.address}', '${item.symbol}')" title="Remove from Watchlist">x</span>
         </div>
       `;
     })
@@ -254,6 +290,9 @@ async function updateWatchlistPrices() {
   } catch {}
 }
 
+const SVG_STAR_OUTLINE = `<svg class="svg-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`;
+const SVG_STAR_FILLED = `<svg class="svg-icon" viewBox="0 0 24 24" width="15" height="15" fill="#FFD700" stroke="#FFD700" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`;
+
 function updateFavButtonState() {
   const isFav = isTokenFavorited(currentTokenAddress);
   const btnHeader = document.getElementById('btnStarTokenHeader');
@@ -263,15 +302,19 @@ function updateFavButtonState() {
     if (isFav) {
       btnHeader.classList.add('active');
       btnHeader.title = 'Remove from Favorites';
+      btnHeader.innerHTML = SVG_STAR_FILLED;
     } else {
       btnHeader.classList.remove('active');
       btnHeader.title = 'Add to Favorites';
+      btnHeader.innerHTML = SVG_STAR_OUTLINE;
     }
   }
 
   if (btnBar) {
-    btnBar.innerText = isFav ? '⭐ Starred' : '⭐ Star Coin';
-    btnBar.style.borderColor = isFav ? '#00FFA3' : 'rgba(255, 215, 0, 0.3)';
+    btnBar.innerHTML = isFav 
+      ? `${SVG_STAR_FILLED} <span>Starred</span>`
+      : `${SVG_STAR_OUTLINE} <span>Star Coin</span>`;
+    btnBar.style.borderColor = isFav ? '#00FFA3' : 'rgba(255, 215, 0, 0.4)';
     btnBar.style.color = isFav ? '#00FFA3' : '#FFD700';
   }
 }
@@ -296,7 +339,7 @@ function handleTgBotClick() {
   if (configuredBotUsername && configuredBotUsername.trim() !== '') {
     window.open(`https://t.me/${configuredBotUsername.replace(/^@/, '')}`, '_blank');
   } else {
-    showToast('⚠️ BOT_USERNAME is not configured in .env! Please set BOT_USERNAME in your .env file.', 'error');
+    showToast('BOT_USERNAME is not configured in .env! Please set BOT_USERNAME in your .env file.', 'error');
   }
 }
 
@@ -341,7 +384,7 @@ function setQuickSlippage(slipBps) {
     }),
   });
 
-  showToast(`⚡ Slippage set to ${pct}%`, 'info');
+  showToast(`Slippage set to ${pct}%`, 'info');
 }
 
 function handleCustomSlippageInput(val) {
@@ -501,8 +544,8 @@ function renderChartLimitLines() {
 
         return `
           <div class="order-target-pill ${isBuy ? 'buy' : 'sell'}">
-            <span>${isBuy ? '🎯 BUY DIP' : '🎯 SELL TP'} @ $${priceStr} (${diffStr})</span>
-            <span class="order-target-pill-btn" onclick="cancelOrder(${o.id})" title="Cancel Order">✕</span>
+            <span>${isBuy ? 'BUY DIP' : 'SELL TP'} @ $${priceStr} (${diffStr})</span>
+            <span class="order-target-pill-btn" onclick="cancelOrder(${o.id})" title="Cancel Order">x</span>
           </div>
         `;
       })
@@ -527,8 +570,8 @@ function renderChartLimitLines() {
       <div class="chart-limit-line-item ${isBuy ? 'buy' : 'sell'}" data-order-id="${o.id}" style="top: ${topPercent.toFixed(1)}%;">
         <div class="chart-limit-badge ${isBuy ? 'buy' : 'sell'}" title="Drag up/down on chart to move order price">
           <span class="chart-limit-drag-grip" title="Drag to adjust price">⋮⋮</span>
-          <span class="chart-limit-badge-text">${isBuy ? '🟢 BUY DIP' : '🔴 SELL TP'} @ $${priceStr} (${diffLabel} • ${amountStr})</span>
-          <span class="chart-limit-badge-close" onclick="event.stopPropagation(); cancelOrder(${o.id})" title="Cancel Order">✕</span>
+          <span class="chart-limit-badge-text">${isBuy ? 'BUY DIP' : 'SELL TP'} @ $${priceStr} (${diffLabel} • ${amountStr})</span>
+          <span class="chart-limit-badge-close" onclick="event.stopPropagation(); cancelOrder(${o.id})" title="Cancel Order">x</span>
         </div>
       </div>
     `;
@@ -547,7 +590,7 @@ function attachChartLineDragListeners() {
   const lineItems = overlay.querySelectorAll('.chart-limit-line-item');
   lineItems.forEach((lineItem) => {
     const startDrag = (e) => {
-      // If clicked on close button (✕), let cancelOrder handle it
+      // If clicked on close button (x), let cancelOrder handle it
       if (e.target.closest('.chart-limit-badge-close')) return;
 
       const orderId = parseInt(lineItem.dataset.orderId, 10);
@@ -585,7 +628,7 @@ function attachChartLineDragListeners() {
 
         const badgeText = lineItem.querySelector('.chart-limit-badge-text');
         if (badgeText) {
-          badgeText.innerHTML = `${isBuy ? '🟢 BUY DIP' : '🔴 SELL TP'} @ $${newPriceStr} (${newDiffLabel} • ${amountStr}) <span class="chart-drag-tag">✨ RELEASE TO SAVE</span>`;
+          badgeText.innerHTML = `${isBuy ? 'BUY DIP' : 'SELL TP'} @ $${newPriceStr} (${newDiffLabel} • ${amountStr}) <span class="chart-drag-tag">RELEASE TO SAVE</span>`;
         }
       };
 
@@ -620,7 +663,7 @@ function attachChartLineDragListeners() {
           });
 
           if (res && res.success) {
-            showToast(`🎯 Order #${order.id} moved to $${finalPriceStr} (${finalDiffLabel})!`, 'success');
+            showToast(`Order #${order.id} moved to $${finalPriceStr} (${finalDiffLabel})!`, 'success');
             await loadOrders();
           } else {
             showToast(res?.error || 'Failed to update order target', 'error');
@@ -728,9 +771,9 @@ function checkInstalledWallets() {
   const sEl = document.getElementById('badgeSolflare');
   const bEl = document.getElementById('badgeBackpack');
 
-  if (pEl) pEl.innerHTML = isPhantom ? '<span class="status-detected">✓ Detected</span>' : '<span class="status-missing">Not installed</span>';
-  if (sEl) sEl.innerHTML = isSolflare ? '<span class="status-detected">✓ Detected</span>' : '<span class="status-missing">Not installed</span>';
-  if (bEl) bEl.innerHTML = isBackpack ? '<span class="status-detected">✓ Detected</span>' : '<span class="status-missing">Not installed</span>';
+  if (pEl) pEl.innerHTML = isPhantom ? '<span class="status-detected">Active Detected</span>' : '<span class="status-missing">Not installed</span>';
+  if (sEl) sEl.innerHTML = isSolflare ? '<span class="status-detected">Active Detected</span>' : '<span class="status-missing">Not installed</span>';
+  if (bEl) bEl.innerHTML = isBackpack ? '<span class="status-detected">Active Detected</span>' : '<span class="status-missing">Not installed</span>';
 }
 
 // Connect Specific or Auto Extension
@@ -745,16 +788,16 @@ async function connectSpecificWallet(walletType = 'auto') {
 
   if (!provider) {
     if (walletType === 'phantom') {
-      showToast('❌ Phantom wallet not found. Redirecting to download...', 'error');
+      showToast('Phantom wallet not found. Redirecting to download...', 'error');
       window.open('https://phantom.app/', '_blank');
     } else if (walletType === 'solflare') {
-      showToast('❌ Solflare wallet not found. Redirecting to download...', 'error');
+      showToast('Solflare wallet not found. Redirecting to download...', 'error');
       window.open('https://solflare.com/', '_blank');
     } else if (walletType === 'backpack') {
-      showToast('❌ Backpack wallet not found. Redirecting to download...', 'error');
+      showToast('Backpack wallet not found. Redirecting to download...', 'error');
       window.open('https://backpack.app/', '_blank');
     } else {
-      showToast('❌ No Solana Extension detected! Please install Phantom or Solflare.', 'error');
+      showToast('No Solana Extension detected! Please install Phantom or Solflare.', 'error');
       window.open('https://phantom.app/', '_blank');
     }
     return;
@@ -786,6 +829,8 @@ async function connectSpecificWallet(walletType = 'auto') {
         if (newPubkey) {
           extWallet.publicKey = newPubkey.toString();
           loadExtensionBalance();
+          loadPortfolio();
+          if (currentTokenAddress) loadToken(currentTokenAddress);
         } else {
           disconnectExtensionWallet();
         }
@@ -793,14 +838,16 @@ async function connectSpecificWallet(walletType = 'auto') {
     }
 
     closeWalletModal();
+    switchWalletMode('extension');
     updateExtensionBadgeUI();
     await loadExtensionBalance();
+    await loadPortfolio();
     if (currentTokenAddress) await loadToken(currentTokenAddress);
 
-    showToast(`👻 Connected: ${pubKeyStr.slice(0, 4)}...${pubKeyStr.slice(-4)}`, 'success');
+    showToast(`Connected: ${pubKeyStr.slice(0, 4)}...${pubKeyStr.slice(-4)}`, 'success');
   } catch (err) {
     console.error('Wallet connection error:', err);
-    showToast(`❌ Connection failed: ${err.message || err}`, 'error');
+    showToast(`Connection failed: ${err.message || err}`, 'error');
   }
 }
 
@@ -844,6 +891,7 @@ function setupExtensionListeners() {
           extWallet.publicKey = resp.publicKey.toString();
           extWallet.provider = provider;
           updateExtensionBadgeUI();
+          loadPortfolio();
         }
       })
       .catch(() => {});
@@ -865,7 +913,7 @@ function switchWalletMode(mode) {
     botBadge?.classList.remove('hidden');
     extBox?.classList.add('hidden');
     limitNotice?.classList.add('hidden');
-    showToast('🤖 Switched to Bot Wallet (Telegram Auto-Sync)', 'info');
+    showToast('Switched to Bot Wallet (Telegram Auto-Sync)', 'info');
   } else {
     btnModeExt?.classList.add('active');
     btnModeBot?.classList.remove('active');
@@ -876,11 +924,12 @@ function switchWalletMode(mode) {
     if (!extWallet.connected) {
       openWalletModal();
     } else {
-      showToast('👻 Switched to Browser Extension Wallet', 'info');
+      showToast('Switched to Browser Extension Wallet', 'info');
     }
   }
 
-  // Refresh token view for updated wallet balances
+  // Refresh token view & portfolio for updated wallet balances
+  loadPortfolio();
   if (currentTokenAddress) {
     loadToken(currentTokenAddress);
   }
@@ -901,8 +950,10 @@ async function disconnectExtensionWallet() {
   extWallet.tokenBalance = { amount: '0', decimals: 6, uiAmount: 0 };
 
   updateExtensionBadgeUI();
-  showToast('Extension disconnected', 'info');
+  switchWalletMode('bot');
+  showToast('Extension disconnected. Switched back to Bot Wallet.', 'info');
 }
+window.disconnectExtensionWallet = disconnectExtensionWallet;
 
 // Update Extension UI Elements
 function updateExtensionBadgeUI() {
@@ -1205,6 +1256,19 @@ function setupEventListeners() {
       } else if (btab === 'orders') {
         document.getElementById('btabOrders')?.classList.remove('hidden');
         loadOrders();
+      } else if (btab === 'copy') {
+        document.getElementById('btabCopy')?.classList.remove('hidden');
+        loadCopyTargets();
+        loadCopyHistory();
+      } else if (btab === 'dca') {
+        document.getElementById('btabDca')?.classList.remove('hidden');
+        loadDcaOrders();
+      } else if (btab === 'trailing') {
+        document.getElementById('btabTrailing')?.classList.remove('hidden');
+        loadTrailingOrders();
+      } else if (btab === 'sniper') {
+        document.getElementById('btabSniper')?.classList.remove('hidden');
+        loadSniperSettings();
       } else if (btab === 'history') {
         document.getElementById('btabHistory')?.classList.remove('hidden');
         loadHistory();
@@ -1313,7 +1377,15 @@ async function loadToken(address, isBackground = false) {
   } catch {}
 
   try {
-    const data = await safeFetchJson(`/api/token/${trimmed}`);
+    const currentAddress = currentWalletMode === 'extension' && extWallet.connected && extWallet.publicKey
+      ? extWallet.publicKey
+      : (activeWallet ? activeWallet.publicKey : '');
+
+    const url = currentAddress
+      ? `/api/token/${trimmed}?walletAddress=${encodeURIComponent(currentAddress)}`
+      : `/api/token/${trimmed}`;
+
+    const data = await safeFetchJson(url);
 
     if (!data.success || !data.token) {
       if (!isBackground) showToast('Token not found or invalid Solana address', 'error');
@@ -1335,11 +1407,18 @@ async function loadToken(address, isBackground = false) {
 
     // Live SOL Balance update from token endpoint
     if (data.solBalance !== undefined && data.solBalance !== null) {
+      const solBal = parseFloat(data.solBalance) || 0;
       if (currentWalletMode === 'bot') {
         const activeWalletBalanceEl = document.getElementById('activeWalletBalance');
-        if (activeWalletBalanceEl) activeWalletBalanceEl.innerText = `${parseFloat(data.solBalance).toFixed(4)} SOL`;
+        if (activeWalletBalanceEl) activeWalletBalanceEl.innerText = `${solBal.toFixed(4)} SOL`;
         const buyAvailSolEl = document.getElementById('buyAvailSol');
-        if (buyAvailSolEl) buyAvailSolEl.innerText = `${parseFloat(data.solBalance).toFixed(4)} SOL`;
+        if (buyAvailSolEl) buyAvailSolEl.innerText = `${solBal.toFixed(4)} SOL`;
+      } else {
+        extWallet.solBalance = solBal;
+        const extBalEl = document.getElementById('extBalanceDisplay');
+        if (extBalEl) extBalEl.innerText = `${solBal.toFixed(4)} SOL`;
+        const buyAvailSolEl = document.getElementById('buyAvailSol');
+        if (buyAvailSolEl) buyAvailSolEl.innerText = `${solBal.toFixed(4)} SOL`;
       }
     }
 
@@ -1436,11 +1515,104 @@ function updateSellEstValue() {
   document.getElementById('sellEstValUsd').innerText = `$${estVal.toFixed(2)}`;
 }
 
+// Robust Extension Transaction Signing & Broadcasting
+async function signAndBroadcastExtensionTx(swapTransactionBase64) {
+  let provider = extWallet.provider || getExtensionProvider();
+  if (!provider) {
+    throw new Error('No Solana wallet extension detected. Please install Phantom or Solflare.');
+  }
+
+  // Ensure provider is connected and authorized
+  if (!provider.publicKey || !provider.isConnected) {
+    if (typeof provider.connect === 'function') {
+      try {
+        const connRes = await provider.connect();
+        if (connRes?.publicKey) {
+          extWallet.publicKey = connRes.publicKey.toString();
+        }
+      } catch (connErr) {
+        throw new Error('Wallet connection was rejected. Please approve the connection request in your wallet.');
+      }
+    }
+  }
+
+  if (!provider.publicKey) {
+    throw new Error('Please unlock your wallet extension and try again.');
+  }
+
+  const binaryString = atob(swapTransactionBase64);
+  const txBuf = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    txBuf[i] = binaryString.charCodeAt(i);
+  }
+
+  if (!window.solanaWeb3 || !window.solanaWeb3.VersionedTransaction) {
+    throw new Error('Solana Web3 SDK is initializing. Please refresh the page and try again.');
+  }
+
+  const versionedTx = window.solanaWeb3.VersionedTransaction.deserialize(txBuf);
+  let signature = '';
+
+  // Attempt 1: Direct signAndSendTransaction from extension
+  try {
+    if (typeof provider.signAndSendTransaction === 'function') {
+      const signRes = await provider.signAndSendTransaction(versionedTx, {
+        skipPreflight: true,
+        maxRetries: 3,
+      });
+      signature = typeof signRes === 'string' ? signRes : (signRes?.signature || signRes?.toString() || '');
+    }
+  } catch (err) {
+    const errMsg = err?.message || String(err);
+    if (errMsg.includes('User rejected') || errMsg.includes('cancelled') || errMsg.includes('declined')) {
+      throw new Error('Transaction cancelled: You declined the request in your wallet.');
+    }
+    console.warn('signAndSendTransaction error, falling back to signTransaction + node broadcast:', err);
+  }
+
+  // Attempt 2: Fallback to signTransaction + backend direct RPC broadcast
+  if (!signature && typeof provider.signTransaction === 'function') {
+    try {
+      const signedTx = await provider.signTransaction(versionedTx);
+      const serialized = signedTx.serialize();
+      let b64 = '';
+      const bytes = new Uint8Array(serialized);
+      for (let i = 0; i < bytes.byteLength; i++) {
+        b64 += String.fromCharCode(bytes[i]);
+      }
+      const rawB64 = btoa(b64);
+
+      const sendRes = await safeFetchJson('/api/trade/send-raw-tx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rawTransactionBase64: rawB64 }),
+      });
+
+      if (!sendRes.success || !sendRes.signature) {
+        throw new Error(sendRes.error || 'Broadcast to Solana node failed');
+      }
+      signature = sendRes.signature;
+    } catch (fallbackErr) {
+      const fbMsg = fallbackErr?.message || String(fallbackErr);
+      if (fbMsg.includes('User rejected') || fbMsg.includes('cancelled') || fbMsg.includes('declined')) {
+        throw new Error('Transaction cancelled: You declined the request in your wallet.');
+      }
+      throw fallbackErr;
+    }
+  }
+
+  if (!signature) {
+    throw new Error('Could not obtain signature from wallet. Please check your extension.');
+  }
+
+  return signature;
+}
+
 // Execute Buy (Bot or Extension)
 async function executeBuy() {
   const btn = document.getElementById('btnExecuteBuy');
   if (!currentTokenAddress || currentTokenAddress.toLowerCase() === 'so11111111111111111111111111111111111111112') {
-    showToast('⚠️ Please select a token (e.g. $BONK, $WIF, $JUP) from the Watchlist to buy!', 'info');
+    showToast('Please select a token (e.g. $BONK, $WIF, $JUP) from the Watchlist to buy!', 'info');
     const favs = getFavorites();
     const otherCoin = favs.find((f) => f.address.toLowerCase() !== 'so11111111111111111111111111111111111111112');
     if (otherCoin) loadToken(otherCoin.address);
@@ -1457,11 +1629,12 @@ async function executeBuy() {
 
   if (currentWalletMode === 'extension') {
     if (!extWallet.connected || !extWallet.publicKey) {
-      showToast('❌ Please connect your Phantom/Solflare extension first!', 'error');
+      showToast('Please connect your Phantom/Solflare extension first!', 'error');
+      openWalletModal();
       btn.disabled = false;
       return;
     }
-    btn.innerText = '⏳ Building Quote...';
+    btn.innerText = 'Building Quote...';
     try {
       const data = await safeFetchJson('/api/trade/build-swap-tx', {
         method: 'POST',
@@ -1480,20 +1653,10 @@ async function executeBuy() {
         throw new Error(data.error || 'Failed to build transaction from Jupiter');
       }
 
-      btn.innerText = '✍️ Please Approve in Wallet...';
-      const txBuf = Uint8Array.from(atob(data.swapTransaction), (c) => c.charCodeAt(0));
-      let signature = '';
+      btn.innerText = 'Please Approve in Wallet...';
+      const signature = await signAndBroadcastExtensionTx(data.swapTransaction);
 
-      if (window.solanaWeb3 && window.solanaWeb3.VersionedTransaction) {
-        const versionedTx = window.solanaWeb3.VersionedTransaction.deserialize(txBuf);
-        const signRes = await extWallet.provider.signAndSendTransaction(versionedTx);
-        signature = signRes.signature || signRes;
-      } else {
-        const signRes = await extWallet.provider.signAndSendTransaction(txBuf);
-        signature = signRes.signature || signRes;
-      }
-
-      showToast(`🚀 Buy Transaction Sent! Tx: ${signature.slice(0, 8)}...`, 'success');
+      showToast(`Buy Transaction Sent! Tx: ${signature.slice(0, 8)}...`, 'success');
 
       // Record trade to DB for PnL
       await safeFetchJson('/api/trade/record-external-trade', {
@@ -1514,17 +1677,18 @@ async function executeBuy() {
 
       await loadExtensionBalance();
       await loadToken(currentTokenAddress);
+      await loadPortfolio();
       await loadHistory();
     } catch (err) {
       console.error('Extension buy error:', err);
-      showToast(`❌ Buy Failed: ${err.message}`, 'error');
+      showToast(err.message || 'Buy failed', 'error');
     } finally {
       btn.disabled = false;
-      btn.innerText = '🟢 Instant Buy';
+      btn.innerText = 'Instant Buy';
     }
   } else {
     // Bot Wallet Mode
-    btn.innerText = '⏳ Swapping on Solana...';
+    btn.innerText = 'Swapping on Solana...';
     try {
       const data = await safeFetchJson('/api/trade/buy', {
         method: 'POST',
@@ -1539,19 +1703,19 @@ async function executeBuy() {
       });
 
       if (data.success) {
-        showToast(`🚀 Buy Success! Received ${data.tokenSymbol}. Tx: ${data.signature.slice(0, 8)}...`, 'success');
+        showToast(`Buy Success! Received ${data.tokenSymbol}. Tx: ${data.signature.slice(0, 8)}...`, 'success');
         await loadStatusAndWallets();
         await loadToken(currentTokenAddress);
         await loadPortfolio();
         await loadHistory();
       } else {
-        showToast(`❌ Swap Failed: ${data.error}`, 'error');
+        showToast(`Swap Failed: ${data.error}`, 'error');
       }
     } catch (err) {
-      showToast(`❌ Error: ${err.message}`, 'error');
+      showToast(`Error: ${err.message}`, 'error');
     } finally {
       btn.disabled = false;
-      btn.innerText = '🟢 Instant Buy';
+      btn.innerText = 'Instant Buy';
     }
   }
 }
@@ -1564,11 +1728,12 @@ async function executeSell() {
 
   if (currentWalletMode === 'extension') {
     if (!extWallet.connected || !extWallet.publicKey) {
-      showToast('❌ Please connect your Phantom/Solflare extension first!', 'error');
+      showToast('Please connect your Phantom/Solflare extension first!', 'error');
+      openWalletModal();
       btn.disabled = false;
       return;
     }
-    btn.innerText = '⏳ Building Quote...';
+    btn.innerText = 'Building Quote...';
     try {
       const data = await safeFetchJson('/api/trade/build-swap-tx', {
         method: 'POST',
@@ -1587,20 +1752,10 @@ async function executeSell() {
         throw new Error(data.error || 'Failed to build transaction from Jupiter');
       }
 
-      btn.innerText = '✍️ Please Approve in Wallet...';
-      const txBuf = Uint8Array.from(atob(data.swapTransaction), (c) => c.charCodeAt(0));
-      let signature = '';
+      btn.innerText = 'Please Approve in Wallet...';
+      const signature = await signAndBroadcastExtensionTx(data.swapTransaction);
 
-      if (window.solanaWeb3 && window.solanaWeb3.VersionedTransaction) {
-        const versionedTx = window.solanaWeb3.VersionedTransaction.deserialize(txBuf);
-        const signRes = await extWallet.provider.signAndSendTransaction(versionedTx);
-        signature = signRes.signature || signRes;
-      } else {
-        const signRes = await extWallet.provider.signAndSendTransaction(txBuf);
-        signature = signRes.signature || signRes;
-      }
-
-      showToast(`🔥 Sell Transaction Sent! Tx: ${signature.slice(0, 8)}...`, 'success');
+      showToast(`Sell Transaction Sent! Tx: ${signature.slice(0, 8)}...`, 'success');
 
       // Record trade to DB
       await safeFetchJson('/api/trade/record-external-trade', {
@@ -1621,17 +1776,18 @@ async function executeSell() {
 
       await loadExtensionBalance();
       await loadToken(currentTokenAddress);
+      await loadPortfolio();
       await loadHistory();
     } catch (err) {
       console.error('Extension sell error:', err);
-      showToast(`❌ Sell Failed: ${err.message}`, 'error');
+      showToast(err.message || 'Sell failed', 'error');
     } finally {
       btn.disabled = false;
-      btn.innerText = '🔴 Instant Sell';
+      btn.innerText = 'Instant Sell';
     }
   } else {
     // Bot Wallet Mode
-    btn.innerText = '⏳ Swapping on Solana...';
+    btn.innerText = 'Swapping on Solana...';
     try {
       const data = await safeFetchJson('/api/trade/sell', {
         method: 'POST',
@@ -1645,19 +1801,19 @@ async function executeSell() {
       });
 
       if (data.success) {
-        showToast(`🔥 Sell Success! Received ${data.outSol} SOL. Tx: ${data.signature.slice(0, 8)}...`, 'success');
+        showToast(`Sell Success! Received ${data.outSol} SOL. Tx: ${data.signature.slice(0, 8)}...`, 'success');
         await loadStatusAndWallets();
         await loadToken(currentTokenAddress);
         await loadPortfolio();
         await loadHistory();
       } else {
-        showToast(`❌ Swap Failed: ${data.error}`, 'error');
+        showToast(`Swap Failed: ${data.error}`, 'error');
       }
     } catch (err) {
-      showToast(`❌ Error: ${err.message}`, 'error');
+      showToast(`Error: ${err.message}`, 'error');
     } finally {
       btn.disabled = false;
-      btn.innerText = '🔴 Instant Sell';
+      btn.innerText = 'Instant Sell';
     }
   }
 }
@@ -1704,16 +1860,16 @@ async function createLimitOrderUI(orderType) {
     });
 
     if (data.success) {
-      showToast(`🎯 Limit Order #${data.order.id} Created!`, 'success');
+      showToast(`Limit Order #${data.order.id} Created!`, 'success');
       await loadOrders();
       renderChartLimitLines();
       const ordersTab = document.querySelector('.bottom-tab[data-btab="orders"]');
       ordersTab?.click();
     } else {
-      showToast(`❌ Failed: ${data.error}`, 'error');
+      showToast(`Failed: ${data.error}`, 'error');
     }
   } catch (err) {
-    showToast(`❌ Error: ${err.message}`, 'error');
+    showToast(`Error: ${err.message}`, 'error');
   }
 }
 
@@ -1746,7 +1902,15 @@ async function saveSettings() {
 // Load Portfolio Holdings
 async function loadPortfolio() {
   try {
-    const data = await safeFetchJson('/api/portfolio');
+    const currentAddress = currentWalletMode === 'extension' && extWallet.connected && extWallet.publicKey
+      ? extWallet.publicKey
+      : (activeWallet ? activeWallet.publicKey : '');
+
+    const url = currentAddress
+      ? `/api/portfolio?walletAddress=${encodeURIComponent(currentAddress)}`
+      : '/api/portfolio';
+
+    const data = await safeFetchJson(url);
     const tbody = document.getElementById('portfolioTableBody');
     const countEl = document.getElementById('countHoldings');
 
@@ -1764,17 +1928,26 @@ async function loadPortfolio() {
       tbody.innerHTML = holdings
         .map(
           (h) => `
-        <tr>
+        <tr class="holding-row" onclick="handleHoldingRowClick(event, '${h.mint}', '$${h.symbol}')" title="Click to view chart and trade $${h.symbol}">
           <td>
-            <div style="font-weight:700;">$${h.symbol}</div>
-            <div style="font-size:10px;color:#888;">${h.name}</div>
+            <div class="token-cell-info">
+              <div style="font-weight:700; color: #FFF; font-size: 14px;">$${h.symbol}</div>
+              <div style="font-size:11px; color:#888;">${h.name}</div>
+              <div class="ca-copy-pill" onclick="event.stopPropagation(); copyToClipboard('${h.mint}', '$${h.symbol} CA')" title="Click to Copy Contract Address">
+                <span>${h.mint.slice(0, 4)}...${h.mint.slice(-4)}</span>
+                <span></span>
+              </div>
+            </div>
           </td>
           <td><strong>${h.amount.toLocaleString()}</strong></td>
           <td>$${h.priceUsd < 0.01 ? h.priceUsd.toFixed(6) : h.priceUsd.toFixed(4)}</td>
           <td style="color:#00FFA3;font-weight:700;">$${h.valueUsd.toFixed(2)}</td>
           <td>
-            <button class="btn-primary-sm" onclick="loadToken('${h.mint}')">Trade</button>
-            <button class="btn-secondary-sm" onclick="window.open('/api/pnl-card/${h.mint}', '_blank')">Card</button>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button class="btn-primary-sm" onclick="event.stopPropagation(); handleHoldingRowClick(event, '${h.mint}', '$${h.symbol}')" title="Open chart & trade $${h.symbol}">Chart</button>
+              <button class="btn-copy-ca" onclick="event.stopPropagation(); copyToClipboard('${h.mint}', '$${h.symbol} CA')" title="Copy Contract Address"> Copy CA</button>
+              <button class="btn-secondary-sm" onclick="event.stopPropagation(); window.open('/api/pnl-card/${h.mint}', '_blank')" title="Generate PnL Card">Card</button>
+            </div>
           </td>
         </tr>
       `
@@ -1785,6 +1958,14 @@ async function loadPortfolio() {
     console.error('Portfolio error:', err);
   }
 }
+
+function handleHoldingRowClick(event, mint, symbol = '') {
+  if (!mint) return;
+  loadToken(mint);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  showToast(`Loading chart & trade panel for ${symbol || mint.slice(0, 4) + '...'}`, 'info');
+}
+window.handleHoldingRowClick = handleHoldingRowClick;
 
 // Load Limit Orders
 async function loadOrders() {
@@ -1816,7 +1997,7 @@ async function loadOrders() {
         <td><span class="dex-pill">${o.status}</span></td>
         <td>${new Date(o.created_at).toLocaleTimeString()}</td>
         <td>
-          ${o.status === 'PENDING' ? `<button class="btn-secondary-sm" onclick="cancelOrder(${o.id})">❌ Cancel</button>` : '—'}
+          ${o.status === 'PENDING' ? `<button class="btn-secondary-sm" onclick="cancelOrder(${o.id})">Cancel</button>` : '—'}
         </td>
       </tr>
     `
@@ -1882,30 +2063,45 @@ async function loadWalletsManager() {
   try {
     const data = await safeFetchJson('/api/wallets');
     const tbody = document.getElementById('walletsTableBody');
+    if (!tbody) return;
 
     if (!data.success || !data.wallets || data.wallets.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="4" class="empty-msg">No wallets found.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4" class="empty-msg">No wallets found. Click 'Create New Wallet' or 'Import Key / Seed Phrase' to get started.</td></tr>`;
       return;
     }
 
     tbody.innerHTML = data.wallets
-      .map(
-        (w) => `
+      .map((w) => {
+        const bal = w.balanceSol !== undefined ? Number(w.balanceSol).toFixed(4) : (w.balance !== undefined ? Number(w.balance).toFixed(4) : '0.0000');
+        const pub = String(w.publicKey || '');
+        return `
       <tr>
-        <td><code>${w.publicKey}</code></td>
-        <td><strong style="color:#00FFA3;">${w.balanceSol.toFixed(4)} SOL</strong></td>
-        <td>${w.isActive ? '⭐ <strong style="color:#00FFA3;">ACTIVE</strong>' : 'Inactive'}</td>
         <td>
-          ${!w.isActive ? `<button class="btn-primary-sm" onclick="selectWallet('${w.publicKey}')">Set Active</button>` : '—'}
+          <div style="display:flex; align-items:center; gap:8px;">
+            <code style="font-weight:700; color:#FFF;">${pub}</code>
+            <button class="btn-copy-sm" onclick="copyToClipboard('${pub}', 'Address')" title="Copy Address">Copy</button>
+          </div>
+        </td>
+        <td><strong style="color:#00FFA3; font-size:14px;">${bal} SOL</strong></td>
+        <td>
+          ${w.isActive ? `<span class="active-wallet-pill">ACTIVE</span>` : '<span style="color:#777; font-size:12px;">Secondary</span>'}
+        </td>
+        <td>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            ${!w.isActive ? `<button class="btn-primary-sm" onclick="selectWallet('${pub}')" title="Set this wallet as active trading wallet">Set Active</button>` : ''}
+            <button class="btn-export-sm" onclick="openExportWalletModal('${pub}')" title="View Private Key & Seed Phrase">Export Keys</button>
+            <button class="btn-danger-sm" onclick="handleDeleteWallet('${pub}')" title="Remove wallet from database">Delete</button>
+          </div>
         </td>
       </tr>
-    `
-      )
+    `;
+      })
       .join('');
   } catch (err) {
     console.error('Wallets error:', err);
   }
 }
+window.loadWalletsManager = loadWalletsManager;
 
 // Select Wallet
 async function selectWallet(publicKey) {
@@ -1925,6 +2121,212 @@ async function selectWallet(publicKey) {
     showToast(`Error: ${err.message}`, 'error');
   }
 }
+window.selectWallet = selectWallet;
+
+// Create New Wallet Handler
+async function handleCreateNewWallet() {
+  try {
+    showToast('Generating new Solana wallet keypair...', 'info');
+    const data = await safeFetchJson('/api/wallets/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (data.success) {
+      document.getElementById('createdPubkeyDisplay').value = data.publicKey || '';
+      document.getElementById('createdPrivkeyDisplay').value = data.privateKey || '';
+      document.getElementById('createdPrivkeyDisplay').type = 'password';
+
+      const mnSec = document.getElementById('createdMnemonicSection');
+      if (data.mnemonic) {
+        if (mnSec) mnSec.classList.remove('hidden');
+        document.getElementById('createdMnemonicDisplay').value = data.mnemonic;
+      } else {
+        if (mnSec) mnSec.classList.add('hidden');
+      }
+
+      document.getElementById('createdWalletModal')?.classList.remove('hidden');
+      showToast('New wallet created successfully!', 'success');
+      await loadStatusAndWallets();
+      await loadWalletsManager();
+    } else {
+      showToast(`Creation failed: ${data.error}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+window.handleCreateNewWallet = handleCreateNewWallet;
+
+function closeCreatedWalletModal() {
+  document.getElementById('createdWalletModal')?.classList.add('hidden');
+}
+window.closeCreatedWalletModal = closeCreatedWalletModal;
+
+// Import Wallet Modal Handlers
+function openImportWalletModal() {
+  const inp = document.getElementById('inputImportKeyOrSeed');
+  if (inp) inp.value = '';
+  document.getElementById('importWalletModal')?.classList.remove('hidden');
+}
+window.openImportWalletModal = openImportWalletModal;
+
+function closeImportWalletModal() {
+  document.getElementById('importWalletModal')?.classList.add('hidden');
+}
+window.closeImportWalletModal = closeImportWalletModal;
+
+async function submitImportWallet() {
+  const input = document.getElementById('inputImportKeyOrSeed')?.value?.trim();
+  if (!input) {
+    showToast('Please enter a Private Key or 12-word Seed Phrase', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btnSubmitImportWallet');
+  if (btn) btn.disabled = true;
+
+  try {
+    const data = await safeFetchJson('/api/wallets/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input }),
+    });
+
+    if (data.success) {
+      showToast(`Imported: ${data.publicKey.slice(0, 4)}...${data.publicKey.slice(-4)}`, 'success');
+      closeImportWalletModal();
+      await loadStatusAndWallets();
+      await loadWalletsManager();
+      await loadPortfolio();
+    } else {
+      showToast(`Import failed: ${data.error}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+window.submitImportWallet = submitImportWallet;
+
+// Export Wallet Modal Handlers
+async function openExportWalletModal(publicKey) {
+  if (!publicKey) return;
+  try {
+    showToast('Retrieving wallet credentials...', 'info');
+    const data = await safeFetchJson('/api/wallets/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ publicKey }),
+    });
+
+    if (data.success) {
+      const pubEl = document.getElementById('exportPubkeyDisplay');
+      const privEl = document.getElementById('exportPrivkeyDisplay');
+      const mnEl = document.getElementById('exportMnemonicDisplay');
+      const mnSec = document.getElementById('exportMnemonicSection');
+
+      if (pubEl) pubEl.value = data.publicKey || '';
+      if (privEl) {
+        privEl.value = data.privateKey || '';
+        privEl.type = 'text';
+      }
+
+      if (data.mnemonic) {
+        if (mnSec) mnSec.classList.remove('hidden');
+        if (mnEl) mnEl.value = data.mnemonic;
+      } else {
+        if (mnSec) mnSec.classList.add('hidden');
+      }
+
+      const modal = document.getElementById('exportWalletModal');
+      if (modal) modal.classList.remove('hidden');
+    } else {
+      showToast(`Failed to export wallet: ${data.error}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+window.openExportWalletModal = openExportWalletModal;
+
+function closeExportWalletModal() {
+  document.getElementById('exportWalletModal')?.classList.add('hidden');
+}
+window.closeExportWalletModal = closeExportWalletModal;
+
+function toggleKeyVisibility(inputId, btn) {
+  const el = document.getElementById(inputId);
+  if (!el) return;
+  if (el.type === 'password') {
+    el.type = 'text';
+    if (btn) btn.innerText = 'Hide';
+  } else {
+    el.type = 'password';
+    if (btn) btn.innerText = 'Show';
+  }
+}
+window.toggleKeyVisibility = toggleKeyVisibility;
+
+// Clipboard helper with robust fallback
+function copyToClipboard(text, label = 'Text') {
+  if (!text) {
+    showToast('Nothing to copy', 'info');
+    return;
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text)
+      .then(() => showToast(`${label} copied to clipboard!`, 'success'))
+      .catch(() => fallbackCopyText(text, label));
+  } else {
+    fallbackCopyText(text, label);
+  }
+}
+window.copyToClipboard = copyToClipboard;
+
+function fallbackCopyText(text, label) {
+  try {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textArea);
+    showToast(`${label} copied to clipboard!`, 'success');
+  } catch (err) {
+    showToast(`Failed to copy ${label}`, 'error');
+  }
+}
+
+// Delete Wallet Handler
+async function handleDeleteWallet(publicKey) {
+  if (!publicKey) return;
+  const confirmed = confirm(`Are you sure you want to remove wallet:\n${publicKey}\n\nPlease ensure you have backed up your private key or seed phrase!`);
+  if (!confirmed) return;
+
+  try {
+    const data = await safeFetchJson(`/api/wallets/${encodeURIComponent(publicKey)}`, {
+      method: 'DELETE',
+    });
+
+    if (data.success) {
+      showToast('Wallet removed successfully', 'info');
+      await loadStatusAndWallets();
+      await loadWalletsManager();
+      await loadPortfolio();
+    } else {
+      showToast(`Delete failed: ${data.error}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+window.handleDeleteWallet = handleDeleteWallet;
 
 // Helper: Format Big Numbers ($1.2M, $450K)
 function formatBigNumber(num) {
@@ -1945,3 +2347,750 @@ function showToast(msg, type = 'info') {
     toast.classList.add('hidden');
   }, 4000);
 }
+
+// Copy Trading Web UI Logic
+let currentCopyBuyMode = 'FIXED';
+
+async function openCopyModal() {
+  const modal = document.getElementById('copyTargetModal');
+  if (modal) modal.classList.remove('hidden');
+  await populateCopyFollowerWallets();
+}
+
+function closeCopyModal() {
+  const modal = document.getElementById('copyTargetModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function populateCopyFollowerWallets() {
+  const select = document.getElementById('selectCopyFollowerWallet');
+  if (!select) return;
+  try {
+    const data = await safeFetchJson('/api/wallets');
+    const wallets = data.wallets || [];
+    if (wallets.length === 0) {
+      select.innerHTML = '<option value="" style="background:#131722; color:#fff;">No wallets available</option>';
+      return;
+    }
+    select.innerHTML = wallets
+      .map((w, idx) => {
+        const pk = w.publicKey || w.public_key || '';
+        const isActive = w.isActive ?? w.is_active ?? false;
+        const bal = typeof w.balanceSol === 'number' ? ` (${w.balanceSol.toFixed(3)} SOL)` : '';
+        const activeTag = isActive ? ' [Active]' : '';
+        const shortPk = pk ? `${pk.slice(0, 4)}...${pk.slice(-4)}` : 'Unknown';
+        const label = `Wallet #${idx + 1} - ${shortPk}${bal}${activeTag}`;
+        return `<option value="${pk}" ${isActive ? 'selected' : ''} style="background:#131722; color:#fff;">${label}</option>`;
+      })
+      .join('');
+  } catch (err) {
+    console.error('Error fetching wallets for copy modal:', err);
+    select.innerHTML = '<option value="" style="background:#131722; color:#fff;">Failed to load wallets</option>';
+  }
+}
+
+function setCopyBuyMode(mode) {
+  currentCopyBuyMode = mode;
+  const btnFixed = document.getElementById('btnCopyModeFixed');
+  const btnPercent = document.getElementById('btnCopyModePercent');
+  const secFixed = document.getElementById('copyFixedSection');
+  const secPercent = document.getElementById('copyPercentSection');
+
+  if (mode === 'PERCENT') {
+    if (btnFixed) btnFixed.classList.remove('active');
+    if (btnPercent) btnPercent.classList.add('active');
+    if (secFixed) secFixed.classList.add('hidden');
+    if (secPercent) secPercent.classList.remove('hidden');
+  } else {
+    if (btnFixed) btnFixed.classList.add('active');
+    if (btnPercent) btnPercent.classList.remove('active');
+    if (secFixed) secFixed.classList.remove('hidden');
+    if (secPercent) secPercent.classList.add('hidden');
+  }
+}
+
+function selectCopySolPreset(val) {
+  document.querySelectorAll('.copy-sol-preset').forEach((btn) => {
+    if (parseFloat(btn.dataset.val) === val) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+  const inp = document.getElementById('inputCopySolAmount');
+  if (inp) inp.value = val;
+}
+
+function selectCopyPercentPreset(val) {
+  document.querySelectorAll('.copy-pct-preset').forEach((btn) => {
+    if (parseFloat(btn.dataset.val) === val) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+  const inp = document.getElementById('inputCopyPercentAmount');
+  if (inp) inp.value = val;
+}
+
+async function submitAddCopyTarget() {
+  const walletInput = document.getElementById('inputCopyTargetWallet');
+  const labelInput = document.getElementById('inputCopyTargetLabel');
+  const followerSelect = document.getElementById('selectCopyFollowerWallet');
+  const solInput = document.getElementById('inputCopySolAmount');
+  const pctInput = document.getElementById('inputCopyPercentAmount');
+  const capInput = document.getElementById('inputCopyMaxSolCap');
+  const mirrorCheck = document.getElementById('checkCopyMirrorSell');
+  const slippageInput = document.getElementById('inputCopySlippage');
+
+  const targetWallet = walletInput?.value?.trim();
+  const label = labelInput?.value?.trim() || '';
+  const followerWallet = followerSelect?.value?.trim() || null;
+  const buyMode = currentCopyBuyMode || 'FIXED';
+  const buyAmountSol = parseFloat(solInput?.value) || 0.1;
+  const buyPercent = parseFloat(pctInput?.value) || 10;
+  const maxSolCap = capInput?.value && parseFloat(capInput.value) > 0 ? parseFloat(capInput.value) : null;
+  const mirrorSell = mirrorCheck ? (mirrorCheck.checked ? 1 : 0) : 1;
+  const maxSlippageBps = Math.floor((parseFloat(slippageInput?.value) || 5.0) * 100);
+
+  if (!targetWallet) {
+    showToast('Please enter a target Solana wallet address', 'error');
+    return;
+  }
+
+  try {
+    const data = await safeFetchJson('/api/copy/targets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        targetWallet,
+        label,
+        followerWallet,
+        buyMode,
+        buyAmountSol,
+        buyPercent,
+        maxSolCap,
+        mirrorSell,
+        maxSlippageBps,
+      }),
+    });
+
+    if (data.success) {
+      showToast(`Target ${label || targetWallet.slice(0, 6)} added! Monitoring 24/7.`, 'success');
+      closeCopyModal();
+      if (walletInput) walletInput.value = '';
+      if (labelInput) labelInput.value = '';
+      if (capInput) capInput.value = '';
+      await loadCopyTargets();
+    } else {
+      showToast(`Failed: ${data.error}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function loadCopyTargets() {
+  try {
+    const data = await safeFetchJson('/api/copy/targets');
+    const tbody = document.getElementById('copyTargetsTableBody');
+    const countEl = document.getElementById('countCopyTargets');
+
+    const targets = data.targets || [];
+    if (countEl) countEl.innerText = targets.filter((t) => t.is_active === 1).length;
+
+    if (!data.success || targets.length === 0) {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="empty-msg">No copy trading targets added yet. Click "Add Target Wallet" above to start copying.</td></tr>`;
+      return;
+    }
+
+    if (tbody) {
+      tbody.innerHTML = targets
+        .map((t) => {
+          const statusClass = t.is_active === 1 ? 'pos-pnl-val' : 'negative';
+          const statusLabel = t.is_active === 1 ? 'ACTIVE' : 'PAUSED';
+          const toggleBtnText = t.is_active === 1 ? 'Pause' : 'Resume';
+          const mirrorLabel = t.mirror_sell === 1 ? '<span style="color:#00FFA3;">Auto %</span>' : '<span style="color:#888;">Off</span>';
+          const labelText = t.label ? `<strong style="color:#fff;">${t.label}</strong><br>` : '';
+
+          const followerDisplay = t.follower_wallet
+            ? `<code style="color:#A78BFA;" title="${t.follower_wallet}">${t.follower_wallet.slice(0, 4)}...${t.follower_wallet.slice(-4)}</code>`
+            : `<span style="color:#888; font-size:12px;">Active Wallet</span>`;
+
+          const amountDisplay = t.buy_mode === 'PERCENT'
+            ? `<strong style="color:#00FFA3;">${t.buy_percent || 10}%</strong> <span style="font-size:11px; color:#888;">(Whale %)${t.max_sol_cap ? '<br>Cap: ' + t.max_sol_cap + ' SOL' : ''}</span>`
+            : `<strong style="color:#00FFA3;">${t.buy_amount_sol} SOL</strong> <span style="font-size:11px; color:#888;">(Fixed)</span>`;
+
+          return `
+            <tr>
+              <td>
+                ${labelText}
+                <code title="${t.target_wallet}">${t.target_wallet.slice(0, 6)}...${t.target_wallet.slice(-6)}</code>
+                <a href="https://solscan.io/account/${t.target_wallet}" target="_blank" style="color:#14F195; margin-left:6px; font-size:11px;" title="View on Solscan">Solscan</a>
+              </td>
+              <td>${followerDisplay}</td>
+              <td>${amountDisplay}</td>
+              <td>${mirrorLabel}</td>
+              <td>${(t.max_slippage_bps / 100).toFixed(1)}%</td>
+              <td><span class="${statusClass}">${statusLabel}</span></td>
+              <td>${new Date(t.created_at).toLocaleDateString()}</td>
+              <td>
+                <button class="btn-secondary-sm" onclick="toggleCopyTarget(${t.id})">${toggleBtnText}</button>
+                <button class="btn-secondary-sm" onclick="deleteCopyTarget(${t.id})" style="color:#FF3B30; border-color:rgba(255,59,48,0.3);">Delete</button>
+              </td>
+            </tr>
+          `;
+        })
+        .join('');
+    }
+  } catch (err) {
+    console.error('Copy targets error:', err);
+  }
+}
+
+async function toggleCopyTarget(id) {
+  try {
+    const data = await safeFetchJson(`/api/copy/targets/${id}/toggle`, { method: 'POST' });
+    if (data.success) {
+      showToast('Target status updated!', 'success');
+      await loadCopyTargets();
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function deleteCopyTarget(id) {
+  if (!confirm('Are you sure you want to delete this copy target?')) return;
+  try {
+    const data = await safeFetchJson(`/api/copy/targets/${id}`, { method: 'DELETE' });
+    if (data.success) {
+      showToast('Copy target deleted', 'info');
+      await loadCopyTargets();
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function loadCopyHistory() {
+  try {
+    const data = await safeFetchJson('/api/copy/history');
+    const tbody = document.getElementById('copyHistoryTableBody');
+
+    const history = data.history || [];
+    if (!data.success || history.length === 0) {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="8" class="empty-msg">No copy trades executed yet. Active targets are monitored on-chain 24/7.</td></tr>`;
+      return;
+    }
+
+    if (tbody) {
+      tbody.innerHTML = history
+        .map((item) => {
+          const typeClass = item.trade_type === 'BUY' ? 'pos-pnl-val' : 'negative';
+          const statusClass = item.status === 'EXECUTED' ? 'pos-pnl-val' : 'negative';
+
+          return `
+            <tr>
+              <td>#${item.id}</td>
+              <td><span class="${typeClass}"><strong>${item.trade_type}</strong></span></td>
+              <td><strong>$${item.token_symbol}</strong></td>
+              <td><code>${item.target_wallet.slice(0, 4)}...${item.target_wallet.slice(-4)}</code></td>
+              <td>${item.amount_sol ? `${item.amount_sol.toFixed(3)} SOL` : '—'}</td>
+              <td><span class="${statusClass}">${item.status}</span></td>
+              <td>
+                ${item.our_tx ? `<a href="https://solscan.io/tx/${item.our_tx}" target="_blank" style="color:#00FFA3; font-weight:600; margin-right:8px;">Bot TX</a>` : ''}
+                ${item.target_tx ? `<a href="https://solscan.io/tx/${item.target_tx}" target="_blank" style="color:#888;">Target TX</a>` : ''}
+              </td>
+              <td>${new Date(item.created_at).toLocaleTimeString()}</td>
+            </tr>
+          `;
+        })
+        .join('');
+    }
+  } catch (err) {
+    console.error('Copy history error:', err);
+  }
+}
+
+// Window Exports for Copy Trading
+window.openCopyModal = openCopyModal;
+window.closeCopyModal = closeCopyModal;
+window.setCopyBuyMode = setCopyBuyMode;
+window.selectCopySolPreset = selectCopySolPreset;
+window.selectCopyPercentPreset = selectCopyPercentPreset;
+window.submitAddCopyTarget = submitAddCopyTarget;
+window.loadCopyTargets = loadCopyTargets;
+window.toggleCopyTarget = toggleCopyTarget;
+window.deleteCopyTarget = deleteCopyTarget;
+window.loadCopyHistory = loadCopyHistory;
+
+// ====================================================
+// Phase 2: DCA (Dollar-Cost Averaging) Logic
+// ====================================================
+function openCreateDcaModal() {
+  const inp = document.getElementById('inputDcaTokenAddress');
+  if (inp && currentTokenAddress) inp.value = currentTokenAddress;
+  document.getElementById('createDcaModal')?.classList.remove('hidden');
+}
+
+function closeCreateDcaModal() {
+  document.getElementById('createDcaModal')?.classList.add('hidden');
+}
+
+function selectDcaSolPreset(val) {
+  document.querySelectorAll('.dca-sol-preset').forEach((btn) => {
+    btn.classList.toggle('active', parseFloat(btn.dataset.val) === val);
+  });
+  const inp = document.getElementById('inputDcaAmountSol');
+  if (inp) inp.value = val;
+}
+
+function selectDcaIntervalPreset(val) {
+  document.querySelectorAll('.dca-interval-preset').forEach((btn) => {
+    btn.classList.toggle('active', parseFloat(btn.dataset.val) === val);
+  });
+  const inp = document.getElementById('inputDcaIntervalHours');
+  if (inp) inp.value = val;
+}
+
+async function submitCreateDcaOrder() {
+  const tokenAddress = document.getElementById('inputDcaTokenAddress')?.value?.trim();
+  const amountSol = parseFloat(document.getElementById('inputDcaAmountSol')?.value) || 0.1;
+  const intervalHours = parseFloat(document.getElementById('inputDcaIntervalHours')?.value) || 1;
+  const totalCycles = parseInt(document.getElementById('inputDcaTotalCycles')?.value, 10) || 10;
+
+  if (!tokenAddress) {
+    showToast('Please enter a token contract address', 'error');
+    return;
+  }
+
+  try {
+    const data = await safeFetchJson('/api/dca', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tokenAddress,
+        tokenSymbol: currentTokenData?.symbol || 'TOKEN',
+        amountSol,
+        intervalHours,
+        totalCycles,
+      }),
+    });
+
+    if (data.success) {
+      showToast(`DCA Schedule activated! (${amountSol} SOL every ${intervalHours}h)`, 'success');
+      playTradeSound('success');
+      closeCreateDcaModal();
+      await loadDcaOrders();
+    } else {
+      showToast(`DCA Failed: ${data.error}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function loadDcaOrders() {
+  try {
+    const data = await safeFetchJson('/api/dca');
+    const tbody = document.getElementById('dcaTableBody');
+    const countEl = document.getElementById('countDcaOrders');
+
+    const orders = data.orders || [];
+    if (countEl) countEl.innerText = orders.filter((o) => o.is_active === 1).length;
+
+    if (!data.success || orders.length === 0) {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="empty-msg">No active DCA schedules. Click 'Create DCA Schedule' above.</td></tr>`;
+      return;
+    }
+
+    if (tbody) {
+      tbody.innerHTML = orders
+        .map((o) => {
+          const statusClass = o.is_active === 1 ? 'pos-pnl-val' : 'negative';
+          const statusLabel = o.is_active === 1 ? 'ACTIVE' : 'PAUSED';
+          const toggleBtn = o.is_active === 1 ? 'Pause' : 'Resume';
+
+          return `
+            <tr>
+              <td><strong>$${o.token_symbol}</strong><br><code style="font-size:11px;">${o.token_address.slice(0, 4)}...${o.token_address.slice(-4)}</code></td>
+              <td><strong style="color:#00FFA3;">${o.amount_sol.toFixed(3)} SOL</strong></td>
+              <td>Every ${o.interval_hours}h</td>
+              <td>${o.executed_cycles} / ${o.total_cycles} buys</td>
+              <td>${new Date(o.next_execution_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
+              <td><span class="${statusClass}">${statusLabel}</span></td>
+              <td>
+                <button class="btn-secondary-sm" onclick="toggleDcaOrder(${o.id})">${toggleBtn}</button>
+                <button class="btn-danger-sm" onclick="deleteDcaOrder(${o.id})">Delete</button>
+              </td>
+            </tr>
+          `;
+        })
+        .join('');
+    }
+  } catch (err) {
+    console.error('DCA load error:', err);
+  }
+}
+
+async function toggleDcaOrder(id) {
+  try {
+    const data = await safeFetchJson(`/api/dca/${id}/toggle`, { method: 'POST' });
+    if (data.success) {
+      showToast('DCA Schedule updated', 'success');
+      await loadDcaOrders();
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function deleteDcaOrder(id) {
+  if (!confirm('Are you sure you want to cancel this DCA schedule?')) return;
+  try {
+    const data = await safeFetchJson(`/api/dca/${id}`, { method: 'DELETE' });
+    if (data.success) {
+      showToast('DCA Schedule cancelled', 'info');
+      await loadDcaOrders();
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+window.openCreateDcaModal = openCreateDcaModal;
+window.closeCreateDcaModal = closeCreateDcaModal;
+window.selectDcaSolPreset = selectDcaSolPreset;
+window.selectDcaIntervalPreset = selectDcaIntervalPreset;
+window.submitCreateDcaOrder = submitCreateDcaOrder;
+window.loadDcaOrders = loadDcaOrders;
+window.toggleDcaOrder = toggleDcaOrder;
+window.deleteDcaOrder = deleteDcaOrder;
+
+// ====================================================
+// Phase 2: Trailing Stop-Loss Logic
+// ====================================================
+function openCreateTrailingModal() {
+  if (!currentTokenAddress || !currentTokenData) {
+    showToast('Please select a token first', 'error');
+    return;
+  }
+  const disp = document.getElementById('inputTrailingTokenDisplay');
+  if (disp) disp.value = `$${currentTokenData.symbol} ($${currentTokenData.priceUsd < 0.01 ? currentTokenData.priceUsd.toFixed(6) : currentTokenData.priceUsd.toFixed(4)})`;
+  document.getElementById('createTrailingModal')?.classList.remove('hidden');
+}
+
+function closeCreateTrailingModal() {
+  document.getElementById('createTrailingModal')?.classList.add('hidden');
+}
+
+function selectTrailPctPreset(val) {
+  document.querySelectorAll('.trail-pct-preset').forEach((btn) => {
+    btn.classList.toggle('active', parseFloat(btn.dataset.val) === val);
+  });
+  const inp = document.getElementById('inputTrailingPct');
+  if (inp) inp.value = val;
+}
+
+function selectTrailQtyPreset(val) {
+  document.querySelectorAll('.trail-qty-preset').forEach((btn) => {
+    btn.classList.toggle('active', parseFloat(btn.dataset.val) === val);
+  });
+  const inp = document.getElementById('inputTrailingAmountPercent');
+  if (inp) inp.value = val;
+}
+
+async function submitCreateTrailingOrder() {
+  if (!currentTokenAddress || !currentTokenData) return;
+  const trailingPct = parseFloat(document.getElementById('inputTrailingPct')?.value) || 15;
+  const amountPercent = parseFloat(document.getElementById('inputTrailingAmountPercent')?.value) || 100;
+
+  try {
+    const data = await safeFetchJson('/api/trailing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tokenAddress: currentTokenAddress,
+        tokenSymbol: currentTokenData.symbol,
+        initialPriceUsd: currentTokenData.priceUsd,
+        trailingPct,
+        amountPercent,
+      }),
+    });
+
+    if (data.success) {
+      showToast(`Trailing SL activated at -${trailingPct}% from peak!`, 'success');
+      playTradeSound('success');
+      closeCreateTrailingModal();
+      await loadTrailingOrders();
+    } else {
+      showToast(`Failed: ${data.error}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function loadTrailingOrders() {
+  try {
+    const data = await safeFetchJson('/api/trailing');
+    const tbody = document.getElementById('trailingTableBody');
+    const countEl = document.getElementById('countTrailingOrders');
+
+    const orders = data.orders || [];
+    if (countEl) countEl.innerText = orders.length;
+
+    if (!data.success || orders.length === 0) {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="7" class="empty-msg">No active Trailing Stop-Loss orders.</td></tr>`;
+      return;
+    }
+
+    if (tbody) {
+      tbody.innerHTML = orders
+        .map((o) => {
+          const stopPrice = o.highest_price_usd * (1 - o.trailing_pct / 100);
+          return `
+            <tr>
+              <td><strong>$${o.token_symbol}</strong></td>
+              <td>$${o.initial_price_usd < 0.01 ? o.initial_price_usd.toFixed(6) : o.initial_price_usd.toFixed(4)}</td>
+              <td><strong style="color:#00FFA3;">$${o.highest_price_usd < 0.01 ? o.highest_price_usd.toFixed(6) : o.highest_price_usd.toFixed(4)}</strong></td>
+              <td><span class="negative">-${o.trailing_pct}%</span></td>
+              <td><strong>$${stopPrice < 0.01 ? stopPrice.toFixed(6) : stopPrice.toFixed(4)}</strong></td>
+              <td>${o.amount_percent}% of bag</td>
+              <td>
+                <button class="btn-danger-sm" onclick="deleteTrailingOrder(${o.id})">Cancel</button>
+              </td>
+            </tr>
+          `;
+        })
+        .join('');
+    }
+  } catch (err) {
+    console.error('Trailing load error:', err);
+  }
+}
+
+async function deleteTrailingOrder(id) {
+  try {
+    const data = await safeFetchJson(`/api/trailing/${id}`, { method: 'DELETE' });
+    if (data.success) {
+      showToast('Trailing Stop-Loss cancelled', 'info');
+      await loadTrailingOrders();
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+window.openCreateTrailingModal = openCreateTrailingModal;
+window.closeCreateTrailingModal = closeCreateTrailingModal;
+window.selectTrailPctPreset = selectTrailPctPreset;
+window.selectTrailQtyPreset = selectTrailQtyPreset;
+window.submitCreateTrailingOrder = submitCreateTrailingOrder;
+window.loadTrailingOrders = loadTrailingOrders;
+window.deleteTrailingOrder = deleteTrailingOrder;
+
+// ====================================================
+// Phase 2: Token Launch Sniper Logic
+// ====================================================
+let isSniperActiveState = false;
+
+async function loadSniperSettings() {
+  try {
+    const data = await safeFetchJson('/api/sniper');
+    if (data.success && data.rule) {
+      const r = data.rule;
+      isSniperActiveState = r.is_active === 1;
+
+      const btn = document.getElementById('btnToggleSniperActive');
+      const txt = document.getElementById('sniperStatusText');
+      if (btn && txt) {
+        if (isSniperActiveState) {
+          btn.className = 'btn-execute sell';
+          txt.innerText = 'Sniper: ACTIVE (TURBO)';
+        } else {
+          btn.className = 'btn-execute buy';
+          txt.innerText = 'Sniper: INACTIVE';
+        }
+      }
+
+      const buyInp = document.getElementById('sniperBuyAmountSol');
+      if (buyInp) buyInp.value = r.buy_amount_sol;
+      const minInp = document.getElementById('sniperMinLiqUsd');
+      if (minInp) minInp.value = r.min_liquidity_usd;
+      const maxInp = document.getElementById('sniperMaxLiqUsd');
+      if (maxInp) maxInp.value = r.max_liquidity_usd;
+      const tpInp = document.getElementById('sniperTakeProfitPct');
+      if (tpInp) tpInp.value = r.take_profit_pct;
+      const slInp = document.getElementById('sniperStopLossPct');
+      if (slInp) slInp.value = r.stop_loss_pct;
+      const rugCheck = document.getElementById('sniperRugFilterCheck');
+      if (rugCheck) rugCheck.checked = r.rug_filter === 1;
+    }
+  } catch (err) {
+    console.error('Sniper settings load error:', err);
+  }
+}
+
+async function saveSniperSettings() {
+  try {
+    const buyAmountSol = parseFloat(document.getElementById('sniperBuyAmountSol')?.value) || 0.1;
+    const minLiquidityUsd = parseFloat(document.getElementById('sniperMinLiqUsd')?.value) || 500;
+    const maxLiquidityUsd = parseFloat(document.getElementById('sniperMaxLiqUsd')?.value) || 50000;
+    const takeProfitPct = parseFloat(document.getElementById('sniperTakeProfitPct')?.value) || 100;
+    const stopLossPct = parseFloat(document.getElementById('sniperStopLossPct')?.value) || 50;
+    const rugFilter = document.getElementById('sniperRugFilterCheck')?.checked ? true : false;
+
+    const data = await safeFetchJson('/api/sniper', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        buyAmountSol,
+        minLiquidityUsd,
+        maxLiquidityUsd,
+        takeProfitPct,
+        stopLossPct,
+        rugFilter,
+      }),
+    });
+
+    if (data.success) {
+      showToast('Sniper rules saved successfully!', 'success');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function toggleSniperState() {
+  try {
+    const newState = !isSniperActiveState;
+    const data = await safeFetchJson('/api/sniper', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isActive: newState }),
+    });
+
+    if (data.success) {
+      isSniperActiveState = newState;
+      if (newState) {
+        showToast('Token Launch Sniper ACTIVATED!', 'success');
+        playTradeSound('success');
+      } else {
+        showToast('Token Launch Sniper PAUSED', 'info');
+      }
+      await loadSniperSettings();
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function triggerManualSnipe() {
+  const tokenAddress = document.getElementById('inputManualSnipeAddress')?.value?.trim();
+  if (!tokenAddress) {
+    showToast('Please paste a Solana token address to snipe', 'error');
+    return;
+  }
+
+  showToast('Executing instant Turbo Snipe...', 'info');
+  try {
+    const data = await safeFetchJson('/api/sniper/manual-snipe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tokenAddress }),
+    });
+
+    if (data.success) {
+      showToast(`Snipe confirmed for ${data.executedCount} order(s)!`, 'success');
+      playTradeSound('success');
+      await loadToken(tokenAddress);
+      await loadPortfolio();
+    } else {
+      showToast(`Snipe Failed: ${data.errors?.join(', ') || 'Check logs'}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+window.loadSniperSettings = loadSniperSettings;
+window.saveSniperSettings = saveSniperSettings;
+window.toggleSniperState = toggleSniperState;
+window.triggerManualSnipe = triggerManualSnipe;
+
+// ====================================================
+// Phase 2 Pro Feature: Web Audio Synthesizer (Trade Beeps)
+// ====================================================
+function playTradeSound(type = 'success') {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    if (type === 'success') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.08); // A5
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.35);
+    } else if (type === 'error') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(220, ctx.currentTime);
+      osc.frequency.setValueAtTime(160, ctx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.3);
+    }
+  } catch {}
+}
+window.playTradeSound = playTradeSound;
+
+// ====================================================
+// Phase 2 Pro Feature: Keyboard Hotkeys
+// ====================================================
+document.addEventListener('keydown', (e) => {
+  // Ignore if user is currently typing in an input or textarea
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) {
+    if (e.key === 'Escape') {
+      document.activeElement.blur();
+      document.querySelectorAll('.modal-backdrop').forEach((m) => m.classList.add('hidden'));
+    }
+    return;
+  }
+
+  const key = e.key.toUpperCase();
+  if (key === 'B') {
+    e.preventDefault();
+    const buyTab = document.querySelector('.side-tab[data-side="buy"]');
+    buyTab?.click();
+    document.getElementById('buySolAmountInput')?.focus();
+  } else if (key === 'S') {
+    e.preventDefault();
+    const sellTab = document.querySelector('.side-tab[data-side="sell"]');
+    sellTab?.click();
+  } else if (key === '1') {
+    e.preventDefault();
+    document.querySelector('.preset-btn[data-val="0.1"]')?.click();
+  } else if (key === '2') {
+    e.preventDefault();
+    document.querySelector('.preset-btn[data-val="0.5"]')?.click();
+  } else if (key === '3') {
+    e.preventDefault();
+    document.querySelector('.preset-btn[data-val="1.0"]')?.click();
+  } else if (key === '4') {
+    e.preventDefault();
+    document.querySelector('.preset-btn[data-val="2.0"]')?.click();
+  } else if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-backdrop').forEach((m) => m.classList.add('hidden'));
+  }
+});
+
+

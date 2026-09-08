@@ -43,21 +43,36 @@ export async function getJupiterQuote(
     return null;
   }
 
-  const endpoints = [
+  const primaryUrls = [
     `https://api.jup.ag/swap/v1/quote?inputMint=${cleanInput}&outputMint=${cleanOutput}&amount=${cleanAmount}&slippageBps=${parsedSlippage}`,
     `https://lite-api.jup.ag/swap/v1/quote?inputMint=${cleanInput}&outputMint=${cleanOutput}&amount=${cleanAmount}&slippageBps=${parsedSlippage}`,
-    `https://api.jup.ag/swap/v1/quote?inputMint=${cleanInput}&outputMint=${cleanOutput}&amount=${cleanAmount}&slippageBps=${Math.max(parsedSlippage, 1500)}`,
-    `https://lite-api.jup.ag/swap/v1/quote?inputMint=${cleanInput}&outputMint=${cleanOutput}&amount=${cleanAmount}&slippageBps=${Math.max(parsedSlippage, 2500)}`,
   ];
 
-  for (const url of endpoints) {
-    try {
-      const response = await axios.get(url, { timeout: 8000 });
-      if (response.data && (response.data.outAmount || response.data.routePlan)) {
-        return response.data;
-      }
-    } catch (error: any) {
-      // Try next fallback endpoint
+  try {
+    const res = await Promise.any(
+      primaryUrls.map((url) =>
+        axios.get(url, { timeout: 4000 }).then((r) => {
+          if (r.data && (r.data.outAmount || r.data.routePlan)) {
+            return r.data;
+          }
+          throw new Error('Invalid quote response');
+        })
+      )
+    );
+    if (res) return res;
+  } catch {
+    // Fallback with higher slippage if initial race failed
+    const fallbackUrls = [
+      `https://api.jup.ag/swap/v1/quote?inputMint=${cleanInput}&outputMint=${cleanOutput}&amount=${cleanAmount}&slippageBps=${Math.max(parsedSlippage, 1500)}`,
+      `https://lite-api.jup.ag/swap/v1/quote?inputMint=${cleanInput}&outputMint=${cleanOutput}&amount=${cleanAmount}&slippageBps=${Math.max(parsedSlippage, 2500)}`,
+    ];
+    for (const url of fallbackUrls) {
+      try {
+        const response = await axios.get(url, { timeout: 4000 });
+        if (response.data && (response.data.outAmount || response.data.routePlan)) {
+          return response.data;
+        }
+      } catch {}
     }
   }
 

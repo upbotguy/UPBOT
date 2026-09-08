@@ -70,6 +70,78 @@ export interface NewLimitOrder {
   amountPercent?: number | null;
 }
 
+export interface DBCopyTarget {
+  id: number;
+  user_id: number;
+  target_wallet: string;
+  follower_wallet?: string | null;
+  label: string | null;
+  buy_amount_sol: number;
+  buy_mode: 'FIXED' | 'PERCENT';
+  buy_percent: number;
+  max_sol_cap: number | null;
+  mirror_sell: number; // 1 = true, 0 = false
+  max_slippage_bps: number;
+  is_active: number; // 1 = active, 0 = paused
+  created_at: string;
+}
+
+export interface DBCopyTrade {
+  id: number;
+  user_id: number;
+  target_wallet: string;
+  token_address: string;
+  token_symbol: string;
+  trade_type: 'BUY' | 'SELL';
+  amount_sol: number;
+  token_amount: number;
+  target_tx: string | null;
+  our_tx: string | null;
+  status: 'EXECUTED' | 'FAILED' | 'SKIPPED';
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface DBSniperRule {
+  id: number;
+  user_id: number;
+  is_active: number;
+  buy_amount_sol: number;
+  min_liquidity_usd: number;
+  max_liquidity_usd: number;
+  take_profit_pct: number;
+  stop_loss_pct: number;
+  rug_filter: number;
+  created_at: string;
+}
+
+export interface DBDcaOrder {
+  id: number;
+  user_id: number;
+  token_address: string;
+  token_symbol: string;
+  amount_sol: number;
+  interval_hours: number;
+  total_cycles: number;
+  executed_cycles: number;
+  next_execution_at: string;
+  is_active: number;
+  created_at: string;
+}
+
+export interface DBTrailingOrder {
+  id: number;
+  user_id: number;
+  token_address: string;
+  token_symbol: string;
+  initial_price_usd: number;
+  highest_price_usd: number;
+  trailing_pct: number;
+  amount_percent: number;
+  is_active: number;
+  created_at: string;
+}
+
 const db = new Database(CONFIG.DATABASE_PATH);
 db.pragma('journal_mode = WAL');
 
@@ -138,6 +210,82 @@ export function initDB() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS copy_targets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      target_wallet TEXT NOT NULL,
+      follower_wallet TEXT,
+      label TEXT,
+      buy_amount_sol REAL DEFAULT 0.1,
+      mirror_sell INTEGER DEFAULT 1,
+      max_slippage_bps INTEGER DEFAULT 500,
+      is_active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(telegram_id) ON DELETE CASCADE,
+      UNIQUE(user_id, target_wallet)
+    );
+
+    CREATE TABLE IF NOT EXISTS copy_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      target_wallet TEXT NOT NULL,
+      token_address TEXT NOT NULL,
+      token_symbol TEXT NOT NULL,
+      trade_type TEXT NOT NULL,
+      amount_sol REAL,
+      token_amount REAL,
+      target_tx TEXT,
+      our_tx TEXT,
+      status TEXT DEFAULT 'EXECUTED',
+      error_message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS sniper_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      is_active INTEGER DEFAULT 0,
+      buy_amount_sol REAL DEFAULT 0.1,
+      min_liquidity_usd REAL DEFAULT 500,
+      max_liquidity_usd REAL DEFAULT 50000,
+      take_profit_pct REAL DEFAULT 100,
+      stop_loss_pct REAL DEFAULT 50,
+      rug_filter INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(telegram_id) ON DELETE CASCADE,
+      UNIQUE(user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS dca_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      token_address TEXT NOT NULL,
+      token_symbol TEXT NOT NULL,
+      amount_sol REAL NOT NULL,
+      interval_hours REAL NOT NULL,
+      total_cycles INTEGER NOT NULL,
+      executed_cycles INTEGER DEFAULT 0,
+      next_execution_at DATETIME NOT NULL,
+      is_active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS trailing_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      token_address TEXT NOT NULL,
+      token_symbol TEXT NOT NULL,
+      initial_price_usd REAL NOT NULL,
+      highest_price_usd REAL NOT NULL,
+      trailing_pct REAL NOT NULL,
+      amount_percent REAL DEFAULT 100,
+      is_active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+    );
   `);
 
   // Ensure active_token and language columns exist if table was created earlier
@@ -151,6 +299,20 @@ export function initDB() {
   // Update any existing default 100 bps slippage to 500 bps (5%)
   try {
     db.prepare('UPDATE user_settings SET slippage_bps = 500 WHERE slippage_bps = 100').run();
+  } catch {}
+
+  // Ensure copy_targets columns for proportional % mode and follower wallet exist
+  try {
+    db.prepare('ALTER TABLE copy_targets ADD COLUMN follower_wallet TEXT').run();
+  } catch {}
+  try {
+    db.prepare("ALTER TABLE copy_targets ADD COLUMN buy_mode TEXT DEFAULT 'FIXED'").run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE copy_targets ADD COLUMN buy_percent REAL DEFAULT 10').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE copy_targets ADD COLUMN max_sol_cap REAL DEFAULT 1.0').run();
   } catch {}
 }
 
@@ -651,3 +813,287 @@ export function getUserRecentTrades(userId: number, limit = 30): DBTrade[] {
   `);
   return stmt.all(userId, limit) as DBTrade[];
 }
+
+// Copy Trading Operations
+export function addCopyTarget(
+  userId: number,
+  targetWallet: string,
+  label?: string | null,
+  buyAmountSol = 0.1,
+  mirrorSell = 1,
+  maxSlippageBps = 500,
+  buyMode: 'FIXED' | 'PERCENT' = 'FIXED',
+  buyPercent = 10,
+  maxSolCap: number | null = 1.0,
+  followerWallet?: string | null
+): DBCopyTarget {
+  getOrCreateUser(userId);
+  const insertStmt = db.prepare(`
+    INSERT INTO copy_targets (user_id, target_wallet, follower_wallet, label, buy_amount_sol, mirror_sell, max_slippage_bps, is_active, buy_mode, buy_percent, max_sol_cap)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+    ON CONFLICT(user_id, target_wallet) DO UPDATE SET
+      follower_wallet = COALESCE(excluded.follower_wallet, copy_targets.follower_wallet),
+      label = excluded.label,
+      buy_amount_sol = excluded.buy_amount_sol,
+      mirror_sell = excluded.mirror_sell,
+      max_slippage_bps = excluded.max_slippage_bps,
+      is_active = 1,
+      buy_mode = excluded.buy_mode,
+      buy_percent = excluded.buy_percent,
+      max_sol_cap = excluded.max_sol_cap
+  `);
+  insertStmt.run(
+    userId,
+    targetWallet.trim(),
+    followerWallet?.trim() || null,
+    label?.trim() || null,
+    buyAmountSol,
+    mirrorSell ? 1 : 0,
+    maxSlippageBps,
+    buyMode,
+    buyPercent,
+    maxSolCap
+  );
+
+  const getStmt = db.prepare('SELECT * FROM copy_targets WHERE user_id = ? AND target_wallet = ?');
+  return getStmt.get(userId, targetWallet.trim()) as DBCopyTarget;
+}
+
+export function getUserCopyTargets(userId: number): DBCopyTarget[] {
+  const stmt = db.prepare(`
+    SELECT * FROM copy_targets
+    WHERE user_id = ?
+    ORDER BY id DESC
+  `);
+  return stmt.all(userId) as DBCopyTarget[];
+}
+
+export function getCopyTargetById(userId: number, targetId: number): DBCopyTarget | null {
+  const stmt = db.prepare('SELECT * FROM copy_targets WHERE id = ? AND user_id = ?');
+  const row = stmt.get(targetId, userId) as DBCopyTarget | undefined;
+  return row || null;
+}
+
+export function getAllActiveCopyTargets(): DBCopyTarget[] {
+  const stmt = db.prepare(`
+    SELECT * FROM copy_targets
+    WHERE is_active = 1
+    ORDER BY id ASC
+  `);
+  return stmt.all() as DBCopyTarget[];
+}
+
+export function toggleCopyTargetStatus(userId: number, targetId: number): boolean {
+  const target = getCopyTargetById(userId, targetId);
+  if (!target) return false;
+  const newStatus = target.is_active === 1 ? 0 : 1;
+  const stmt = db.prepare('UPDATE copy_targets SET is_active = ? WHERE id = ? AND user_id = ?');
+  const result = stmt.run(newStatus, targetId, userId);
+  return result.changes > 0;
+}
+
+export function deleteCopyTarget(userId: number, targetId: number): boolean {
+  const stmt = db.prepare('DELETE FROM copy_targets WHERE id = ? AND user_id = ?');
+  const result = stmt.run(targetId, userId);
+  return result.changes > 0;
+}
+
+export function recordCopyTrade(trade: {
+  userId: number;
+  targetWallet: string;
+  tokenAddress: string;
+  tokenSymbol: string;
+  tradeType: 'BUY' | 'SELL';
+  amountSol?: number;
+  tokenAmount?: number;
+  targetTx?: string;
+  ourTx?: string;
+  status: 'EXECUTED' | 'FAILED' | 'SKIPPED';
+  errorMessage?: string;
+}): void {
+  const stmt = db.prepare(`
+    INSERT INTO copy_trades (user_id, target_wallet, token_address, token_symbol, trade_type, amount_sol, token_amount, target_tx, our_tx, status, error_message)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  stmt.run(
+    trade.userId,
+    trade.targetWallet,
+    trade.tokenAddress,
+    trade.tokenSymbol,
+    trade.tradeType,
+    trade.amountSol || 0,
+    trade.tokenAmount || 0,
+    trade.targetTx || null,
+    trade.ourTx || null,
+    trade.status,
+    trade.errorMessage || null
+  );
+}
+
+export function getUserCopyTrades(userId: number, limit = 30): DBCopyTrade[] {
+  const stmt = db.prepare(`
+    SELECT * FROM copy_trades
+    WHERE user_id = ?
+    ORDER BY id DESC
+    LIMIT ?
+  `);
+  return stmt.all(userId, limit) as DBCopyTrade[];
+}
+
+// ----------------------------------------------------
+// Sniper Engine Operations
+// ----------------------------------------------------
+export function getSniperRule(userId: number): DBSniperRule {
+  getOrCreateUser(userId);
+  const stmt = db.prepare('SELECT * FROM sniper_rules WHERE user_id = ?');
+  let rule = stmt.get(userId) as DBSniperRule | undefined;
+  if (!rule) {
+    db.prepare(`
+      INSERT OR IGNORE INTO sniper_rules (user_id, is_active, buy_amount_sol, min_liquidity_usd, max_liquidity_usd, take_profit_pct, stop_loss_pct, rug_filter)
+      VALUES (?, 0, 0.1, 500, 50000, 100, 50, 1)
+    `).run(userId);
+    rule = stmt.get(userId) as DBSniperRule;
+  }
+  return rule;
+}
+
+export function updateSniperRule(
+  userId: number,
+  params: {
+    isActive?: boolean;
+    buyAmountSol?: number;
+    minLiquidityUsd?: number;
+    maxLiquidityUsd?: number;
+    takeProfitPct?: number;
+    stopLossPct?: number;
+    rugFilter?: boolean;
+  }
+): DBSniperRule {
+  const current = getSniperRule(userId);
+  const newActive = params.isActive !== undefined ? (params.isActive ? 1 : 0) : current.is_active;
+  const newBuySol = params.buyAmountSol !== undefined ? params.buyAmountSol : current.buy_amount_sol;
+  const newMinLiq = params.minLiquidityUsd !== undefined ? params.minLiquidityUsd : current.min_liquidity_usd;
+  const newMaxLiq = params.maxLiquidityUsd !== undefined ? params.maxLiquidityUsd : current.max_liquidity_usd;
+  const newTp = params.takeProfitPct !== undefined ? params.takeProfitPct : current.take_profit_pct;
+  const newSl = params.stopLossPct !== undefined ? params.stopLossPct : current.stop_loss_pct;
+  const newRug = params.rugFilter !== undefined ? (params.rugFilter ? 1 : 0) : current.rug_filter;
+
+  db.prepare(`
+    UPDATE sniper_rules
+    SET is_active = ?, buy_amount_sol = ?, min_liquidity_usd = ?, max_liquidity_usd = ?, take_profit_pct = ?, stop_loss_pct = ?, rug_filter = ?
+    WHERE user_id = ?
+  `).run(newActive, newBuySol, newMinLiq, newMaxLiq, newTp, newSl, newRug, userId);
+
+  return getSniperRule(userId);
+}
+
+export function getAllActiveSniperRules(): DBSniperRule[] {
+  const stmt = db.prepare('SELECT * FROM sniper_rules WHERE is_active = 1');
+  return stmt.all() as DBSniperRule[];
+}
+
+// ----------------------------------------------------
+// DCA (Dollar-Cost Averaging) Operations
+// ----------------------------------------------------
+export function getUserDcaOrders(userId: number): DBDcaOrder[] {
+  getOrCreateUser(userId);
+  const stmt = db.prepare('SELECT * FROM dca_orders WHERE user_id = ? ORDER BY id DESC');
+  return stmt.all(userId) as DBDcaOrder[];
+}
+
+export function createDcaOrder(
+  userId: number,
+  tokenAddress: string,
+  tokenSymbol: string,
+  amountSol: number,
+  intervalHours: number,
+  totalCycles: number
+): DBDcaOrder {
+  getOrCreateUser(userId);
+  const nextExec = new Date(Date.now() + intervalHours * 3600 * 1000).toISOString();
+  const stmt = db.prepare(`
+    INSERT INTO dca_orders (user_id, token_address, token_symbol, amount_sol, interval_hours, total_cycles, executed_cycles, next_execution_at, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?, 1)
+  `);
+  const info = stmt.run(userId, tokenAddress, tokenSymbol, amountSol, intervalHours, totalCycles, nextExec);
+  return db.prepare('SELECT * FROM dca_orders WHERE id = ?').get(info.lastInsertRowid) as DBDcaOrder;
+}
+
+export function toggleDcaOrderStatus(userId: number, orderId: number): boolean {
+  const row = db.prepare('SELECT is_active FROM dca_orders WHERE id = ? AND user_id = ?').get(orderId, userId) as { is_active: number } | undefined;
+  if (!row) return false;
+  const newStatus = row.is_active === 1 ? 0 : 1;
+  const stmt = db.prepare('UPDATE dca_orders SET is_active = ? WHERE id = ? AND user_id = ?');
+  return stmt.run(newStatus, orderId, userId).changes > 0;
+}
+
+export function deleteDcaOrder(userId: number, orderId: number): boolean {
+  const stmt = db.prepare('DELETE FROM dca_orders WHERE id = ? AND user_id = ?');
+  return stmt.run(orderId, userId).changes > 0;
+}
+
+export function getAllDueDcaOrders(): DBDcaOrder[] {
+  const now = new Date().toISOString();
+  const stmt = db.prepare(`
+    SELECT * FROM dca_orders
+    WHERE is_active = 1 AND executed_cycles < total_cycles AND next_execution_at <= ?
+    ORDER BY next_execution_at ASC
+  `);
+  return stmt.all(now) as DBDcaOrder[];
+}
+
+export function recordDcaExecution(orderId: number, intervalHours: number): void {
+  const nextExec = new Date(Date.now() + intervalHours * 3600 * 1000).toISOString();
+  db.prepare(`
+    UPDATE dca_orders
+    SET executed_cycles = executed_cycles + 1,
+        next_execution_at = ?,
+        is_active = CASE WHEN executed_cycles + 1 >= total_cycles THEN 0 ELSE is_active END
+    WHERE id = ?
+  `).run(nextExec, orderId);
+}
+
+// ----------------------------------------------------
+// Trailing Stop-Loss & TP Operations
+// ----------------------------------------------------
+export function getUserTrailingOrders(userId: number): DBTrailingOrder[] {
+  getOrCreateUser(userId);
+  const stmt = db.prepare('SELECT * FROM trailing_orders WHERE user_id = ? AND is_active = 1 ORDER BY id DESC');
+  return stmt.all(userId) as DBTrailingOrder[];
+}
+
+export function createTrailingOrder(
+  userId: number,
+  tokenAddress: string,
+  tokenSymbol: string,
+  initialPriceUsd: number,
+  trailingPct: number,
+  amountPercent = 100
+): DBTrailingOrder {
+  getOrCreateUser(userId);
+  const stmt = db.prepare(`
+    INSERT INTO trailing_orders (user_id, token_address, token_symbol, initial_price_usd, highest_price_usd, trailing_pct, amount_percent, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+  `);
+  const info = stmt.run(userId, tokenAddress, tokenSymbol, initialPriceUsd, initialPriceUsd, trailingPct, amountPercent);
+  return db.prepare('SELECT * FROM trailing_orders WHERE id = ?').get(info.lastInsertRowid) as DBTrailingOrder;
+}
+
+export function deleteTrailingOrder(userId: number, orderId: number): boolean {
+  const stmt = db.prepare('DELETE FROM trailing_orders WHERE id = ? AND user_id = ?');
+  return stmt.run(orderId, userId).changes > 0;
+}
+
+export function getAllActiveTrailingOrders(): DBTrailingOrder[] {
+  const stmt = db.prepare('SELECT * FROM trailing_orders WHERE is_active = 1');
+  return stmt.all() as DBTrailingOrder[];
+}
+
+export function updateTrailingHighWatermark(orderId: number, newHighestPrice: number): void {
+  db.prepare('UPDATE trailing_orders SET highest_price_usd = ? WHERE id = ?').run(newHighestPrice, orderId);
+}
+
+export function completeTrailingOrder(orderId: number): void {
+  db.prepare('UPDATE trailing_orders SET is_active = 0 WHERE id = ?').run(orderId);
+}
+

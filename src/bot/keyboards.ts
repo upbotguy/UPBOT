@@ -1,5 +1,5 @@
 import { InlineKeyboard } from 'grammy';
-import { DecryptedWallet, DBSettings, DBLimitOrder } from '../db/index.js';
+import { DecryptedWallet, DBSettings, DBLimitOrder, DBCopyTarget } from '../db/index.js';
 import { formatAddress, WalletPortfolio } from '../services/wallet.js';
 import { getT, SupportedLanguage } from '../i18n/index.js';
 
@@ -12,12 +12,13 @@ export function getMainMenuKeyboard(lang: SupportedLanguage = 'en'): InlineKeybo
     .text(t.btn_trade, 'menu:trade')
     .text(t.btn_portfolio, 'menu:portfolio')
     .row()
+    .text(t.btn_copy_trading, 'menu:copy')
     .text(t.btn_orders, 'menu:orders')
+    .row()
     .text(t.btn_wallets, 'menu:security')
-    .row()
     .text(t.btn_settings, 'menu:settings')
-    .text(t.btn_language, 'menu:language')
     .row()
+    .text(t.btn_language, 'menu:language')
     .text(t.btn_refresh, 'menu:refresh');
 }
 
@@ -28,13 +29,13 @@ export function getLanguageKeyboard(lang: SupportedLanguage = 'en'): InlineKeybo
   const t = getT(lang);
   return new InlineKeyboard()
     .text('🇺🇸 English', 'lang:set:en')
-    .text('🇨🇳 简体中文', 'lang:set:zh')
+    .text('🇨🇳 Chinese', 'lang:set:zh')
     .row()
-    .text('🇷🇺 Русский', 'lang:set:ru')
-    .text('🇰🇷 한국어', 'lang:set:ko')
+    .text('🇷🇺 Russian', 'lang:set:ru')
+    .text('🇰🇷 Korean', 'lang:set:ko')
     .row()
-    .text('🇪🇸 Español', 'lang:set:es')
-    .text('🇲🇲 မြန်မာစာ', 'lang:set:my')
+    .text('🇪🇸 Spanish', 'lang:set:es')
+    .text('🇲🇲 Burmese', 'lang:set:my')
     .row()
     .text(t.btn_back_main, 'menu:main');
 }
@@ -321,3 +322,57 @@ export function getPriorityFeeKeyboard(currentFee: number, lang: SupportedLangua
     .row()
     .text(t.btn_back_main, 'menu:settings');
 }
+
+/**
+ * Copy Trading Hub Keyboard
+ */
+export function getCopyMenuKeyboard(targets: DBCopyTarget[], lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
+  const kb = new InlineKeyboard();
+
+  if (targets.length > 0) {
+    targets.forEach((target, index) => {
+      const statusIcon = target.is_active === 1 ? '🟢' : '⏸️';
+      const label = target.label || `Target #${target.id}`;
+      kb.text(`${statusIcon} ${label} (${formatAddress(target.target_wallet, 4)})`, `copy:view:${target.id}`).row();
+    });
+  }
+
+  kb.text(t.btn_add_copy_target, 'copy:add')
+    .row()
+    .text(t.btn_refresh, 'menu:copy')
+    .text(t.btn_back_main, 'menu:main');
+
+  return kb;
+}
+
+/**
+ * Single Copy Target Detail Keyboard
+ */
+export function getCopyTargetDetailKeyboard(target: DBCopyTarget, lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const t = getT(lang);
+  const toggleText = target.is_active === 1 ? t.btn_pause_target : t.btn_resume_target;
+
+  return new InlineKeyboard()
+    .text(toggleText, `copy:toggle:${target.id}`)
+    .text(t.btn_delete_target, `copy:delete:${target.id}`)
+    .row()
+    .url(t.btn_view_solscan, `https://solscan.io/account/${target.target_wallet}`)
+    .row()
+    .text(t.btn_back_copy, 'menu:copy');
+}
+
+/**
+ * Mirror Sell Selection Keyboard (For Conversation)
+ */
+export function getCopyMirrorChoiceKeyboard(lang: SupportedLanguage = 'en'): InlineKeyboard {
+  const yesText = 'Yes, Enable Mirror Sell';
+  const noText = 'No, Buy Only';
+
+  return new InlineKeyboard()
+    .text(yesText, 'copy:mirror:yes')
+    .text(noText, 'copy:mirror:no')
+    .row()
+    .text('Cancel', 'copy:cancel');
+}
+

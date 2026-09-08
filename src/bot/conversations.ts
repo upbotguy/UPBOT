@@ -17,6 +17,8 @@ import {
   getUserLimitOrders,
   recordTrade,
   getUserTokenPosition,
+  addCopyTarget,
+  getUserCopyTargets,
 } from '../db/index.js';
 import {
   importWalletAuto,
@@ -33,12 +35,15 @@ import {
   getOrderDetailMessage,
   getOrdersListMessage,
   getSettingsMessage,
+  getCopyMenuMessage,
 } from './messages.js';
 import {
   getTokenTradeKeyboard,
   getOrderDetailKeyboard,
   getOrdersKeyboard,
   getSettingsKeyboard,
+  getCopyMenuKeyboard,
+  getCopyMirrorChoiceKeyboard,
 } from './keyboards.js';
 import { executeJupiterSwap, getJupiterQuote } from '../services/swap.js';
 import { CONFIG } from '../config.js';
@@ -141,12 +146,30 @@ async function waitForInputOrCancel(
   // If user clicked any cancel/back callback
   if (update.callbackQuery) {
     const data = update.callbackQuery.data || '';
+    if (data.startsWith('copy:preset_sol:')) {
+      await update.answerCallbackQuery().catch(() => {});
+      const val = data.replace('copy:preset_sol:', '');
+      return { text: val, isCancelled: false };
+    }
+    if (data === 'copy:skip_label') {
+      await update.answerCallbackQuery().catch(() => {});
+      return { text: 'skip', isCancelled: false };
+    }
+    if (data === 'copy:mirror:yes') {
+      await update.answerCallbackQuery().catch(() => {});
+      return { text: 'yes', isCancelled: false };
+    }
+    if (data === 'copy:mirror:no') {
+      await update.answerCallbackQuery().catch(() => {});
+      return { text: 'no', isCancelled: false };
+    }
     if (
       data.startsWith('menu:') ||
       data.startsWith('token:') ||
       data.startsWith('wallet:') ||
       data.startsWith('orders:') ||
       data.startsWith('order:') ||
+      data.startsWith('copy:cancel') ||
       data === 'cancel'
     ) {
       await update.answerCallbackQuery().catch(() => {});
@@ -157,7 +180,7 @@ async function waitForInputOrCancel(
   // If user sent a text message
   if (update.message?.text) {
     const text = update.message.text.trim();
-    if (text === '/cancel' || text.toLowerCase() === 'cancel' || text.includes('Cancel') || text.includes('မလုပ်တော့ပါ')) {
+    if (text === '/cancel' || text.toLowerCase() === 'cancel' || text.includes('Cancel')) {
       return { isCancelled: true };
     }
     return { text, isCancelled: false };
@@ -1120,3 +1143,122 @@ export async function customSlippageConversation(
     }
   );
 }
+
+/**
+ * Add Copy Trading Target Wallet Conversation
+ */
+export async function addCopyTargetConversation(
+  conversation: MyConversation,
+  ctx: MyContext
+): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const userLang = getUserLanguage(userId);
+  const t = getT(userLang);
+
+  // Step 1: Target Wallet Address
+  const promptMsg1 = await ctx.reply(t.prompt_copy_target_wallet, {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard().text(t.btn_cancel, 'menu:copy'),
+  });
+
+  const res1 = await waitForInputOrCancel(conversation, ctx);
+  if (res1.isCancelled || !res1.text) {
+    try {
+      await ctx.api.deleteMessage(ctx.chat!.id, promptMsg1.message_id);
+    } catch {}
+    return;
+  }
+
+  const targetWallet = res1.text.trim();
+  if (!isValidSolanaAddress(targetWallet)) {
+    await ctx.reply('❌ Invalid Solana Wallet Address. Please enter a valid base58 Solana address.', {
+      reply_markup: new InlineKeyboard().text(t.btn_try_again, 'copy:add').text(t.btn_cancel, 'menu:copy'),
+    });
+    return;
+  }
+
+  // Step 2: Label / Nickname
+  const labelPromptText =
+    `🏷️ *Enter a Label / Nickname for this Wallet:*\n\n` +
+    `Address: \`${formatAddress(targetWallet, 6)}\`\n\n` +
+    `_Type a name (e.g. "Solana Whale #1", "Alpha Degen") or click Skip:_`;
+
+  const promptLabelMsg = await ctx.reply(labelPromptText, {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard().text('⏩ Skip', 'copy:skip_label').row().text(t.btn_cancel, 'menu:copy'),
+  });
+
+  const resLabel = await waitForInputOrCancel(conversation, ctx);
+  let label: string | null = null;
+  if (!resLabel.isCancelled && resLabel.text && resLabel.text.toLowerCase() !== 'skip') {
+    label = resLabel.text.trim();
+  }
+
+  // Step 3: SOL Buy Amount
+  const promptMsg2 = await ctx.reply(t.prompt_copy_buy_sol(targetWallet), {
+    parse_mode: 'Markdown',
+    reply_markup: new InlineKeyboard()
+      .text('0.1 SOL', 'copy:preset_sol:0.1')
+      .text('0.5 SOL', 'copy:preset_sol:0.5')
+      .text('1.0 SOL', 'copy:preset_sol:1.0')
+      .row()
+      .text(t.btn_cancel, 'menu:copy'),
+  });
+
+  const res2 = await waitForInputOrCancel(conversation, ctx);
+  if (res2.isCancelled || !res2.text) {
+    try {
+      await ctx.api.deleteMessage(ctx.chat!.id, promptMsg2.message_id);
+    } catch {}
+    return;
+  }
+
+  const solAmount = parseFloat(res2.text.trim());
+  if (isNaN(solAmount) || solAmount <= 0) {
+    await ctx.reply(t.invalid_input_err);
+    return;
+  }
+
+  // Step 4: Mirror Sell preference
+  const promptMsg3 = await ctx.reply(t.prompt_copy_mirror_sell(targetWallet), {
+    parse_mode: 'Markdown',
+    reply_markup: getCopyMirrorChoiceKeyboard(userLang),
+  });
+
+  let mirrorSell = 1;
+  const res3 = await waitForInputOrCancel(conversation, ctx);
+  if (!res3.isCancelled && res3.text) {
+    const txt = res3.text.toLowerCase();
+    if (txt.includes('no') || txt === '0' || txt === 'off' || txt === 'false') {
+      mirrorSell = 0;
+    }
+  }
+
+  // Save to DB (bind to current active wallet)
+  const currentActiveWallet = getActiveWallet(userId);
+  addCopyTarget(
+    userId,
+    targetWallet,
+    label,
+    solAmount,
+    mirrorSell,
+    500,
+    'FIXED',
+    10,
+    1.0,
+    currentActiveWallet?.publicKey || null
+  );
+
+  const allTargets = getUserCopyTargets(userId);
+  await ctx.reply(
+    `${t.copy_target_added(targetWallet, solAmount, mirrorSell === 1)}\n\n` +
+      getCopyMenuMessage(allTargets, userLang),
+    {
+      parse_mode: 'Markdown',
+      reply_markup: getCopyMenuKeyboard(allTargets, userLang),
+    }
+  );
+}
+

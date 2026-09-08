@@ -1,4 +1,4 @@
-import { DecryptedWallet, DBSettings, DBLimitOrder, UserTokenPosition } from '../db/index.js';
+import { DecryptedWallet, DBSettings, DBLimitOrder, UserTokenPosition, DBCopyTarget } from '../db/index.js';
 import { TokenInfo, formatCurrency, formatChange } from '../services/token.js';
 import { formatAddress, WalletPortfolio } from '../services/wallet.js';
 import { getT, SupportedLanguage } from '../i18n/index.js';
@@ -186,3 +186,47 @@ export function getOrderDetailMessage(order: DBLimitOrder, currentPrice?: number
     order.created_at
   );
 }
+
+export function getCopyMenuMessage(targets: DBCopyTarget[], lang: SupportedLanguage = 'en'): string {
+  const t = getT(lang);
+  const activeCount = targets.filter((t) => t.is_active === 1).length;
+
+  if (targets.length === 0) {
+    const emptyText = `_No target wallets added yet._\n\nClick the "➕ Add Target Wallet" button below to start automatically copying trades from any Solana wallet address!`;
+    return t.copy_menu_title(0, emptyText);
+  }
+
+  const listText = targets
+    .map((target, idx) => {
+      const statusStr = target.is_active === 1 ? '🟢 [ACTIVE]' : '⏸️ [PAUSED]';
+      const labelStr = target.label ? `*${target.label}*` : `Target #${target.id}`;
+      const mirrorStr = target.mirror_sell === 1 ? 'Auto %' : 'Off';
+      return (
+        `*${idx + 1}.* ${labelStr} ${statusStr}\n` +
+        `   • Address: \`${formatAddress(target.target_wallet, 6)}\`\n` +
+        `   • Buy SOL: \`${target.buy_amount_sol} SOL\` | Mirror Sell: \`${mirrorStr}\`\n` +
+        `   • Full: \`${target.target_wallet}\``
+      );
+    })
+    .join('\n\n');
+
+  return t.copy_menu_title(activeCount, listText);
+}
+
+export function getCopyTargetDetailMessage(target: DBCopyTarget, lang: SupportedLanguage = 'en'): string {
+  const statusStr = target.is_active === 1 ? '🟢 ACTIVE (Monitoring)' : '⏸️ PAUSED';
+  const labelStr = target.label ? target.label : 'None';
+  const mirrorStr = target.mirror_sell === 1 ? 'Enabled (Auto proportional sell)' : 'Disabled';
+
+  return (
+    `👥 *Copy Target #${target.id} Details*\n\n` +
+    `👤 *Label:* \`${labelStr}\`\n` +
+    `💳 *Wallet Address:*\n\`${target.target_wallet}\`\n\n` +
+    `📊 *Status:* \`${statusStr}\`\n` +
+    `💰 *Buy Amount Per Trade:* \`${target.buy_amount_sol} SOL\`\n` +
+    `🔄 *Mirror Sell:* \`${mirrorStr}\`\n` +
+    `⚡ *Max Slippage:* \`${(target.max_slippage_bps / 100).toFixed(1)}%\`\n` +
+    `🕒 *Added At:* \`${target.created_at}\``
+  );
+}
+

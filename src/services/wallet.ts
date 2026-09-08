@@ -28,8 +28,8 @@ export function generateNewWallet(): { keypair: Keypair; mnemonic: string; priva
 /**
  * Import a Solana Keypair from Base58 (sol_88), Hex (sol_128), or JSON array private key string
  */
-export function importWalletFromPrivateKey(privateKeyStr: string): { keypair: Keypair; publicKey: string } {
-  const trimmed = privateKeyStr.trim();
+export function importWalletFromPrivateKey(privateKeyStr: string): { keypair: Keypair; publicKey: string; privateKeyBase58: string } {
+  let trimmed = privateKeyStr.trim().replace(/^["']|["']$/g, '');
   let secretKey: Uint8Array;
 
   if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
@@ -55,52 +55,59 @@ export function importWalletFromPrivateKey(privateKeyStr: string): { keypair: Ke
     throw new Error('Invalid Solana private key length (must be 32 or 64 bytes)');
   }
   const keypair = secretKey.length === 64 ? Keypair.fromSecretKey(secretKey) : Keypair.fromSeed(secretKey);
+  const privateKeyBase58 = bs58.encode(keypair.secretKey);
+
   return {
     keypair,
     publicKey: keypair.publicKey.toBase58(),
+    privateKeyBase58,
   };
 }
 
 /**
  * Import a Solana Keypair from 12 or 24 words mnemonic phrase
  */
-export function importWalletFromMnemonic(mnemonic: string): { keypair: Keypair; publicKey: string; mnemonic: string } {
-  const normalized = mnemonic.trim().toLowerCase().replace(/\s+/g, ' ');
+export function importWalletFromMnemonic(mnemonic: string): { keypair: Keypair; publicKey: string; mnemonic: string; privateKeyBase58: string } {
+  const normalized = mnemonic.trim().toLowerCase().replace(/[\r\n,]+/g, ' ').replace(/\s+/g, ' ');
   if (!bip39.validateMnemonic(normalized)) {
-    throw new Error('Invalid seed phrase / mnemonic');
+    throw new Error('Invalid seed phrase / mnemonic (words or checksum incorrect)');
   }
 
   const seed = bip39.mnemonicToSeedSync(normalized, '');
   const derivedSeed = derivePath("m/44'/501'/0'/0'", seed.toString('hex')).key;
   const keypair = Keypair.fromSeed(derivedSeed);
+  const privateKeyBase58 = bs58.encode(keypair.secretKey);
 
   return {
     keypair,
     publicKey: keypair.publicKey.toBase58(),
     mnemonic: normalized,
+    privateKeyBase58,
   };
 }
 
 /**
  * Auto-detect input type (Private Key or Mnemonic) and return Keypair
  */
-export function importWalletAuto(input: string): { keypair: Keypair; publicKey: string; mnemonic: string | null } {
-  const trimmed = input.trim();
-  const words = trimmed.split(/\s+/);
+export function importWalletAuto(input: string): { keypair: Keypair; publicKey: string; mnemonic: string | null; privateKeyBase58: string } {
+  const cleaned = input.trim().replace(/^["']|["']$/g, '');
+  const words = cleaned.replace(/[\r\n,]+/g, ' ').replace(/\s+/g, ' ').split(' ');
 
   if (words.length >= 12 && words.length <= 24) {
-    const res = importWalletFromMnemonic(trimmed);
+    const res = importWalletFromMnemonic(cleaned);
     return {
       keypair: res.keypair,
       publicKey: res.publicKey,
       mnemonic: res.mnemonic,
+      privateKeyBase58: res.privateKeyBase58,
     };
   } else {
-    const res = importWalletFromPrivateKey(trimmed);
+    const res = importWalletFromPrivateKey(cleaned);
     return {
       keypair: res.keypair,
       publicKey: res.publicKey,
       mnemonic: null,
+      privateKeyBase58: res.privateKeyBase58,
     };
   }
 }
@@ -155,6 +162,24 @@ export async function getTokenBalance(
     });
 
     if (tokenAccounts.value.length === 0) {
+      // Check Token-2022 Program if standard query returns empty
+      try {
+        const token2022Accounts = await connection.getParsedTokenAccountsByOwner(walletPubkey, {
+          mint: mintPubkey,
+          programId: TOKEN_2022_PROGRAM_ID,
+        });
+        if (token2022Accounts.value.length > 0) {
+          const accountInfo = token2022Accounts.value[0].account.data.parsed.info.tokenAmount;
+          const res = {
+            uiAmount: accountInfo.uiAmount || 0,
+            decimals: accountInfo.decimals || 0,
+            amount: accountInfo.amount || '0',
+          };
+          tokenBalanceCache.set(cacheKey, { data: res, timestamp: Date.now() });
+          return res;
+        }
+      } catch {}
+
       const zero = { uiAmount: 0, decimals: 0, amount: '0' };
       tokenBalanceCache.set(cacheKey, { data: zero, timestamp: Date.now() });
       return zero;

@@ -11,6 +11,8 @@ import {
   getActiveWallet,
   setActiveWallet,
   addWallet,
+  getWalletByPublicKey,
+  removeWallet,
   getUserSettings,
   updateUserSettings,
   getUserLimitOrders,
@@ -20,9 +22,25 @@ import {
   recordTrade,
   getUserTokenPosition,
   getUserRecentTrades,
+  getUserCopyTargets,
+  addCopyTarget,
+  toggleCopyTargetStatus,
+  deleteCopyTarget,
+  getUserCopyTrades,
+  getSniperRule,
+  updateSniperRule,
+  getUserDcaOrders,
+  createDcaOrder,
+  toggleDcaOrderStatus,
+  deleteDcaOrder,
+  getUserTrailingOrders,
+  createTrailingOrder,
+  deleteTrailingOrder,
   DecryptedWallet,
 } from '../db/index.js';
+import { executeSnipeForToken, checkTokenLaunchSafety } from '../services/sniperEngine.js';
 import {
+  connection,
   getSolBalance,
   getTokenBalance,
   generateNewWallet,
@@ -144,6 +162,7 @@ export function createWebServer() {
       res.json({
         success: true,
         publicKey: pubkey,
+        privateKey: newW.privateKeyBase58,
         mnemonic: newW.mnemonic,
       });
     } catch (err: any) {
@@ -152,20 +171,70 @@ export function createWebServer() {
   });
 
   /**
-   * Import Wallet
+   * Import Wallet (Supports Private Key Base58/Hex/JSON OR 12-24 Words Seed Phrase)
    */
   app.post('/api/wallets/import', async (req, res) => {
     try {
-      const { privateKey } = req.body;
-      if (!privateKey) {
-        return res.status(400).json({ success: false, error: 'Private key is required' });
+      const input = (req.body.privateKey || req.body.mnemonic || req.body.key || req.body.input || '')?.trim();
+      if (!input) {
+        return res.status(400).json({ success: false, error: 'Please enter a Private Key or 12-24 words Seed Phrase' });
       }
       const { userId } = getWebActiveWallet();
-      const imported = importWalletFromPrivateKey(privateKey);
-      addWallet(userId, imported.publicKey, privateKey);
-      res.json({ success: true, publicKey: imported.publicKey });
+      const imported = importWalletAuto(input);
+      addWallet(userId, imported.publicKey, imported.privateKeyBase58, imported.mnemonic);
+      res.json({
+        success: true,
+        publicKey: imported.publicKey,
+        mnemonic: imported.mnemonic,
+      });
     } catch (err: any) {
-      res.status(400).json({ success: false, error: err.message });
+      res.status(400).json({ success: false, error: err.message || 'Invalid Private Key or Seed Phrase' });
+    }
+  });
+
+  /**
+   * Export / Reveal Wallet Keys
+   */
+  app.post('/api/wallets/export', async (req, res) => {
+    try {
+      const { publicKey } = req.body;
+      if (!publicKey) {
+        return res.status(400).json({ success: false, error: 'Public key is required' });
+      }
+      const { userId } = getWebActiveWallet();
+      const wallet = getWalletByPublicKey(userId, publicKey);
+      if (!wallet) {
+        return res.status(404).json({ success: false, error: 'Wallet not found' });
+      }
+      res.json({
+        success: true,
+        publicKey: wallet.publicKey,
+        privateKey: wallet.privateKey,
+        mnemonic: wallet.mnemonic,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * Remove / Delete Wallet
+   */
+  app.delete('/api/wallets/:publicKey', async (req, res) => {
+    try {
+      const publicKey = req.params.publicKey?.trim();
+      if (!publicKey) {
+        return res.status(400).json({ success: false, error: 'Public key is required' });
+      }
+      const { userId } = getWebActiveWallet();
+      const wallets = getUserWallets(userId);
+      if (wallets.length <= 1) {
+        return res.status(400).json({ success: false, error: 'Cannot delete your only wallet. Please import or create another wallet first.' });
+      }
+      const success = removeWallet(userId, publicKey);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 
@@ -174,11 +243,18 @@ export function createWebServer() {
    */
   app.get('/api/portfolio', async (req, res) => {
     try {
+      const queryAddress = (req.query.walletAddress as string)?.trim();
       const { activeWallet } = getWebActiveWallet();
-      if (!activeWallet) {
+      
+      const targetPubkey = queryAddress && isValidSolanaAddress(queryAddress)
+        ? queryAddress
+        : activeWallet?.publicKey;
+
+      if (!targetPubkey) {
         return res.json({ success: true, portfolio: null, holdings: [] });
       }
-      const portfolio = await getWalletPortfolio(activeWallet.publicKey);
+
+      const portfolio = await getWalletPortfolio(targetPubkey);
       const holdings = portfolio.tokens.map((t) => ({
         mint: t.mint,
         symbol: t.symbol,
@@ -208,19 +284,24 @@ export function createWebServer() {
         return res.status(400).json({ success: false, error: 'Invalid Solana address' });
       }
 
+      const queryAddress = (req.query.walletAddress as string)?.trim();
       const { userId, activeWallet } = getWebActiveWallet();
+      
+      const targetPubkey = queryAddress && isValidSolanaAddress(queryAddress)
+        ? queryAddress
+        : activeWallet?.publicKey;
 
       const [token, tokenBal, solBal] = await Promise.all([
         fetchTokenInfo(address, true),
-        activeWallet ? getTokenBalance(activeWallet.publicKey, address, true) : Promise.resolve({ uiAmount: 0, decimals: 0, amount: '0' }),
-        activeWallet ? getSolBalance(activeWallet.publicKey, true) : Promise.resolve(0),
+        targetPubkey ? getTokenBalance(targetPubkey, address, true) : Promise.resolve({ uiAmount: 0, decimals: 0, amount: '0' }),
+        targetPubkey ? getSolBalance(targetPubkey, true) : Promise.resolve(0),
       ]);
 
       if (!token) {
         return res.status(404).json({ success: false, error: 'Token not found on Solana Network' });
       }
 
-      const position = getUserTokenPosition(userId, address, activeWallet?.publicKey);
+      const position = getUserTokenPosition(userId, address, targetPubkey);
 
       res.json({
         success: true,
@@ -516,6 +597,107 @@ export function createWebServer() {
   });
 
   /**
+   * Copy Trading Targets List
+   */
+  app.get('/api/copy/targets', async (req, res) => {
+    try {
+      const { userId } = getWebActiveWallet();
+      const targets = getUserCopyTargets(userId);
+      res.json({ success: true, targets });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * Add Copy Trading Target
+   */
+  app.post('/api/copy/targets', async (req, res) => {
+    try {
+      const {
+        targetWallet,
+        label,
+        buyAmountSol = 0.1,
+        mirrorSell = 1,
+        maxSlippageBps = 500,
+        buyMode = 'FIXED',
+        buyPercent = 10,
+        maxSolCap = 1.0,
+        followerWallet,
+      } = req.body;
+      const { userId, activeWallet } = getWebActiveWallet();
+
+      if (!targetWallet || !isValidSolanaAddress(targetWallet)) {
+        return res.status(400).json({ success: false, error: 'Invalid Solana wallet address' });
+      }
+
+      const sol = parseFloat(buyAmountSol) || 0.1;
+      const pct = parseFloat(buyPercent) || 10;
+      const cap = maxSolCap !== null && maxSolCap !== undefined && maxSolCap !== '' ? parseFloat(maxSolCap) : null;
+      const mode = buyMode === 'PERCENT' ? 'PERCENT' : 'FIXED';
+      const selectedFollower = followerWallet || activeWallet?.publicKey || null;
+
+      const target = addCopyTarget(
+        userId,
+        targetWallet,
+        label,
+        sol,
+        mirrorSell ? 1 : 0,
+        parseInt(maxSlippageBps, 10) || 500,
+        mode,
+        pct,
+        cap,
+        selectedFollower
+      );
+
+      res.json({ success: true, target });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * Toggle Copy Target Active/Pause
+   */
+  app.post('/api/copy/targets/:id/toggle', async (req, res) => {
+    try {
+      const targetId = parseInt(req.params.id, 10);
+      const { userId } = getWebActiveWallet();
+      const success = toggleCopyTargetStatus(userId, targetId);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * Delete Copy Target
+   */
+  app.delete('/api/copy/targets/:id', async (req, res) => {
+    try {
+      const targetId = parseInt(req.params.id, 10);
+      const { userId } = getWebActiveWallet();
+      const success = deleteCopyTarget(userId, targetId);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * Copy Trading History
+   */
+  app.get('/api/copy/history', async (req, res) => {
+    try {
+      const { userId } = getWebActiveWallet();
+      const history = getUserCopyTrades(userId, 30);
+      res.json({ success: true, history });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
    * Download PnL Card Image
    */
   app.get('/api/pnl-card/:address', async (req, res) => {
@@ -581,6 +763,164 @@ export function createWebServer() {
       updateUserSettings(userId, slippageBps, undefined, priorityFeeSol);
       const updated = getUserSettings(userId);
       res.json({ success: true, settings: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * DCA (Dollar-Cost Averaging) Endpoints
+   */
+  app.get('/api/dca', async (req, res) => {
+    try {
+      const { userId } = getWebActiveWallet();
+      const orders = getUserDcaOrders(userId);
+      res.json({ success: true, orders });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/dca', async (req, res) => {
+    try {
+      const { tokenAddress, tokenSymbol, amountSol, intervalHours, totalCycles } = req.body;
+      if (!tokenAddress || !isValidSolanaAddress(tokenAddress)) {
+        return res.status(400).json({ success: false, error: 'Invalid token address' });
+      }
+      const sol = parseFloat(amountSol);
+      const interval = parseFloat(intervalHours);
+      const cycles = parseInt(totalCycles, 10);
+
+      if (isNaN(sol) || sol <= 0) return res.status(400).json({ success: false, error: 'Invalid amount SOL' });
+      if (isNaN(interval) || interval <= 0) return res.status(400).json({ success: false, error: 'Invalid interval hours' });
+      if (isNaN(cycles) || cycles <= 0) return res.status(400).json({ success: false, error: 'Invalid total cycles' });
+
+      const { userId } = getWebActiveWallet();
+      const order = createDcaOrder(userId, tokenAddress, tokenSymbol || 'TOKEN', sol, interval, cycles);
+      res.json({ success: true, order });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/dca/:id/toggle', async (req, res) => {
+    try {
+      const orderId = parseInt(req.params.id, 10);
+      const { userId } = getWebActiveWallet();
+      const success = toggleDcaOrderStatus(userId, orderId);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/dca/:id', async (req, res) => {
+    try {
+      const orderId = parseInt(req.params.id, 10);
+      const { userId } = getWebActiveWallet();
+      const success = deleteDcaOrder(userId, orderId);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * Trailing Stop-Loss Endpoints
+   */
+  app.get('/api/trailing', async (req, res) => {
+    try {
+      const { userId } = getWebActiveWallet();
+      const orders = getUserTrailingOrders(userId);
+      res.json({ success: true, orders });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/trailing', async (req, res) => {
+    try {
+      const { tokenAddress, tokenSymbol, initialPriceUsd, trailingPct, amountPercent } = req.body;
+      if (!tokenAddress || !isValidSolanaAddress(tokenAddress)) {
+        return res.status(400).json({ success: false, error: 'Invalid token address' });
+      }
+      const price = parseFloat(initialPriceUsd);
+      const trail = parseFloat(trailingPct);
+      const pct = parseFloat(amountPercent) || 100;
+
+      if (isNaN(price) || price <= 0) return res.status(400).json({ success: false, error: 'Invalid initial price' });
+      if (isNaN(trail) || trail <= 0 || trail >= 100) return res.status(400).json({ success: false, error: 'Trailing % must be between 1 and 99' });
+
+      const { userId } = getWebActiveWallet();
+      const order = createTrailingOrder(userId, tokenAddress, tokenSymbol || 'TOKEN', price, trail, pct);
+      res.json({ success: true, order });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete('/api/trailing/:id', async (req, res) => {
+    try {
+      const orderId = parseInt(req.params.id, 10);
+      const { userId } = getWebActiveWallet();
+      const success = deleteTrailingOrder(userId, orderId);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * Token Launch Sniper Endpoints
+   */
+  app.get('/api/sniper', async (req, res) => {
+    try {
+      const { userId } = getWebActiveWallet();
+      const rule = getSniperRule(userId);
+      res.json({ success: true, rule });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/sniper', async (req, res) => {
+    try {
+      const {
+        isActive,
+        buyAmountSol,
+        minLiquidityUsd,
+        maxLiquidityUsd,
+        takeProfitPct,
+        stopLossPct,
+        rugFilter,
+      } = req.body;
+
+      const { userId } = getWebActiveWallet();
+      const updated = updateSniperRule(userId, {
+        isActive: isActive !== undefined ? !!isActive : undefined,
+        buyAmountSol: buyAmountSol !== undefined ? parseFloat(buyAmountSol) : undefined,
+        minLiquidityUsd: minLiquidityUsd !== undefined ? parseFloat(minLiquidityUsd) : undefined,
+        maxLiquidityUsd: maxLiquidityUsd !== undefined ? parseFloat(maxLiquidityUsd) : undefined,
+        takeProfitPct: takeProfitPct !== undefined ? parseFloat(takeProfitPct) : undefined,
+        stopLossPct: stopLossPct !== undefined ? parseFloat(stopLossPct) : undefined,
+        rugFilter: rugFilter !== undefined ? !!rugFilter : undefined,
+      });
+
+      res.json({ success: true, rule: updated });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/sniper/manual-snipe', async (req, res) => {
+    try {
+      const { tokenAddress } = req.body;
+      if (!tokenAddress || !isValidSolanaAddress(tokenAddress)) {
+        return res.status(400).json({ success: false, error: 'Invalid token address' });
+      }
+
+      const result = await executeSnipeForToken(tokenAddress);
+      res.json({ success: result.success, executedCount: result.executedCount, errors: result.errors });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -712,6 +1052,32 @@ export function createWebServer() {
     } catch (err: any) {
       console.error('Error building swap tx for extension:', err?.response?.data || err.message);
       res.status(500).json({ success: false, error: err?.response?.data?.message || err.message });
+    }
+  });
+
+  /**
+   * Broadcast Raw Signed Transaction from Extension Wallet
+   */
+  app.post('/api/trade/send-raw-tx', async (req, res) => {
+    try {
+      const { rawTransactionBase64 } = req.body;
+      if (!rawTransactionBase64) {
+        return res.status(400).json({ success: false, error: 'Missing raw transaction data' });
+      }
+
+      const rawBuffer = Buffer.from(rawTransactionBase64, 'base64');
+      const signature = await connection.sendRawTransaction(rawBuffer, {
+        skipPreflight: true,
+        maxRetries: 3,
+      });
+
+      res.json({
+        success: true,
+        signature,
+      });
+    } catch (err: any) {
+      console.error('Error broadcasting raw transaction:', err);
+      res.status(500).json({ success: false, error: err?.message || 'Transaction broadcast failed' });
     }
   });
 
