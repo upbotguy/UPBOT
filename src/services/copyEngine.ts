@@ -126,14 +126,26 @@ async function processTargetTransaction(
 
     if (!parsedTx || !parsedTx.meta) return;
 
+    // 1. Anti-Spam Security: Target wallet MUST be a signer/initiator of the transaction
+    const accountKeys = (parsedTx.transaction.message as any).accountKeys || [];
+    const isTargetSigner = accountKeys.some((k: any, idx: number) => {
+      const pub = typeof k === 'string' ? k : k.pubkey?.toBase58?.() || String(k);
+      const isSigner = typeof k === 'object' ? (k.signer === true || k.isSigner === true) : idx === 0;
+      return pub === targetWallet && isSigner;
+    });
+
+    // If target wallet is NOT a signer, this is an unsolicited inbound transfer/spam airdrop from an external wallet. SKIP!
+    if (!isTargetSigner) {
+      return;
+    }
+
     const preTokenBalances = parsedTx.meta.preTokenBalances || [];
     const postTokenBalances = parsedTx.meta.postTokenBalances || [];
 
-    // Calculate target SOL spent
+    // 2. Calculate target SOL/WSOL actually spent on DEX
     let targetSpentSol = 0;
     try {
-      const keys = (parsedTx.transaction.message as any).accountKeys || [];
-      const targetIdx = keys.findIndex((k: any) => {
+      const targetIdx = accountKeys.findIndex((k: any) => {
         const pub = typeof k === 'string' ? k : k.pubkey?.toBase58?.() || String(k);
         return pub === targetWallet;
       });
@@ -141,10 +153,49 @@ async function processTargetTransaction(
         const preLamports = parsedTx.meta.preBalances[targetIdx] || 0;
         const postLamports = parsedTx.meta.postBalances[targetIdx] || 0;
         if (preLamports > postLamports) {
-          targetSpentSol = (preLamports - postLamports) / LAMPORTS_PER_SOL;
+          const diff = (preLamports - postLamports) / LAMPORTS_PER_SOL;
+          if (diff > 0.0005) { // Above standard tx fee
+            targetSpentSol = diff;
+          }
         }
       }
     } catch {}
+
+    // Check WSOL decrease if swap was executed using wrapped SOL
+    try {
+      const preWsol = preTokenBalances.find(p => p.owner === targetWallet && p.mint.toLowerCase() === CONFIG.WSOL_MINT.toLowerCase());
+      const postWsol = postTokenBalances.find(p => p.owner === targetWallet && p.mint.toLowerCase() === CONFIG.WSOL_MINT.toLowerCase());
+      if (preWsol && postWsol) {
+        const wsolDelta = parseFloat(preWsol.uiTokenAmount.uiAmountString || '0') - parseFloat(postWsol.uiTokenAmount.uiAmountString || '0');
+        if (wsolDelta > 0.0005) {
+          targetSpentSol = Math.max(targetSpentSol, wsolDelta);
+        }
+      }
+    } catch {}
+
+    // 3. Verify that this is a genuine DEX interaction
+    const DEX_PROGRAM_IDS = new Set([
+      '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8', // Raydium V4
+      'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C', // Raydium CPMM
+      'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK', // Raydium CLMM
+      '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P', // Pump.fun
+      'JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4', // Jupiter V6
+      'JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB', // Jupiter V4
+      'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc', // Orca
+      'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo', // Meteora DLMM
+      'Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB', // Meteora Pools
+      'MoonCVVNZFSYkqNXP6bxHLPL6QQJiMagDL3qcqUQTrG', // Moonshot
+    ]);
+
+    const isDexTx = accountKeys.some((k: any) => {
+      const pub = typeof k === 'string' ? k : k.pubkey?.toBase58?.() || String(k);
+      return DEX_PROGRAM_IDS.has(pub);
+    }) || (parsedTx.meta.logMessages || []).some(log => 
+      log.toLowerCase().includes('instruction: swap') ||
+      log.toLowerCase().includes('instruction: buy') ||
+      log.toLowerCase().includes('program 6EF8r') ||
+      log.toLowerCase().includes('program 675k')
+    );
 
     // Analyze token balance delta for the target wallet
     for (const post of postTokenBalances) {
@@ -158,7 +209,12 @@ async function processTargetTransaction(
       const delta = postAmount - preAmount;
 
       if (delta > 0.000001) {
-        // Target BOUGHT tokens!
+        // Target received tokens. Must be a genuine DEX Buy with spent SOL!
+        if (!isDexTx && targetSpentSol <= 0.001) {
+          // Unsolicited token transfer or non-DEX airdrop without SOL expenditure -> SKIP!
+          continue;
+        }
+
         const tradeKey = `${targetWallet}:${mint}:BUY`;
         if (inFlightTargetTrades.has(tradeKey)) continue;
         inFlightTargetTrades.add(tradeKey);
@@ -234,13 +290,24 @@ async function executeCopyBuy(
   }
 
   let solAmount = target.buy_amount_sol || 0.1;
-  if (target.buy_mode === 'PERCENT' && targetSpentSol > 0) {
+
+  // Strict sizing calculation: Handle PERCENT mode without fallbacks
+  if (target.buy_mode === 'PERCENT') {
+    if (targetSpentSol <= 0.0005) {
+      console.log(`[Copy Engine] Skipping copy buy: Target spent negligible SOL (${targetSpentSol} SOL)`);
+      return;
+    }
     const pct = target.buy_percent || 10;
     solAmount = (targetSpentSol * pct) / 100;
     if (target.max_sol_cap && target.max_sol_cap > 0) {
       solAmount = Math.min(solAmount, target.max_sol_cap);
     }
-    solAmount = Math.max(0.005, parseFloat(solAmount.toFixed(4)));
+    solAmount = Math.max(0.001, parseFloat(solAmount.toFixed(4)));
+  } else {
+    // FIXED mode: Enforce max_sol_cap if set
+    if (target.max_sol_cap && target.max_sol_cap > 0) {
+      solAmount = Math.min(solAmount, target.max_sol_cap);
+    }
   }
 
   const solBalance = await getSolBalance(activeWallet.publicKey, true);

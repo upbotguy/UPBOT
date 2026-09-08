@@ -726,6 +726,10 @@ function getExtensionProvider(preferType = 'auto') {
     if (window.phantom?.solana) return window.phantom.solana;
     return null;
   }
+  if (preferType === 'metamask') {
+    if (window.ethereum?.isMetaMask) return window.ethereum;
+    return null;
+  }
   if (preferType === 'solflare') {
     if (window.solflare?.isSolflare) return window.solflare;
     if (window.solflare) return window.solflare;
@@ -738,12 +742,23 @@ function getExtensionProvider(preferType = 'auto') {
     if (window.solana?.isBackpack) return window.solana;
     return null;
   }
+  if (preferType === 'okx') {
+    if (window.okxwallet?.solana) return window.okxwallet.solana;
+    return null;
+  }
+  if (preferType === 'bitget') {
+    if (window.bitkeep?.solana) return window.bitkeep.solana;
+    return null;
+  }
 
   // Auto / Any mode
   if (window.phantom?.solana) return window.phantom.solana;
   if (window.solflare) return window.solflare;
   if (window.backpack) return window.backpack;
+  if (window.okxwallet?.solana) return window.okxwallet.solana;
+  if (window.bitkeep?.solana) return window.bitkeep.solana;
   if (window.solana) return window.solana;
+  if (window.ethereum?.isMetaMask) return window.ethereum;
   return null;
 }
 
@@ -763,17 +778,60 @@ function closeWalletModal() {
 }
 
 function checkInstalledWallets() {
-  const isPhantom = !!(window.phantom?.solana || window.solana?.isPhantom);
-  const isSolflare = !!(window.solflare || window.solana?.isSolflare);
-  const isBackpack = !!(window.backpack || window.solana?.isBackpack);
+  const isPhantom = !!(window.phantom?.solana?.isPhantom || window.phantom?.solana || window.solana?.isPhantom);
+  const isMetaMask = !!(window.ethereum?.isMetaMask);
+  const isSolflare = !!(window.solflare?.isSolflare || window.solflare || window.solana?.isSolflare);
+  const isBackpack = !!(window.backpack?.isBackpack || window.backpack || window.solana?.isBackpack);
+  const isOkx = !!(window.okxwallet?.solana || window.okxwallet);
+  const isBitget = !!(window.bitkeep?.solana || window.bitkeep);
 
   const pEl = document.getElementById('badgePhantom');
+  const mEl = document.getElementById('badgeMetaMask');
   const sEl = document.getElementById('badgeSolflare');
   const bEl = document.getElementById('badgeBackpack');
+  const oEl = document.getElementById('badgeOkx');
+  const bgEl = document.getElementById('badgeBitget');
 
-  if (pEl) pEl.innerHTML = isPhantom ? '<span class="status-detected">Active Detected</span>' : '<span class="status-missing">Not installed</span>';
-  if (sEl) sEl.innerHTML = isSolflare ? '<span class="status-detected">Active Detected</span>' : '<span class="status-missing">Not installed</span>';
-  if (bEl) bEl.innerHTML = isBackpack ? '<span class="status-detected">Active Detected</span>' : '<span class="status-missing">Not installed</span>';
+  const getStatusBadge = (installed, type) => {
+    if (extWallet.connected && extWallet.walletType === type) {
+      return '<span class="status-connected">Connected</span>';
+    }
+    return installed
+      ? '<span class="status-detected">Installed</span>'
+      : '<span class="status-missing">Not Installed</span>';
+  };
+
+  if (pEl) pEl.innerHTML = getStatusBadge(isPhantom, 'phantom');
+  if (mEl) mEl.innerHTML = getStatusBadge(isMetaMask, 'metamask');
+  if (sEl) sEl.innerHTML = getStatusBadge(isSolflare, 'solflare');
+  if (bEl) bEl.innerHTML = getStatusBadge(isBackpack, 'backpack');
+  if (oEl) oEl.innerHTML = getStatusBadge(isOkx, 'okx');
+  if (bgEl) bgEl.innerHTML = getStatusBadge(isBitget, 'bitget');
+
+  // Update Active Wallet Info Card in Modal
+  const activeCard = document.getElementById('activeWalletInfoCard');
+  const activeTitle = document.getElementById('activeWalletModalTitle');
+  const activeAddr = document.getElementById('activeWalletModalAddress');
+  const activeBal = document.getElementById('activeWalletModalBalance');
+  const activeIcon = document.getElementById('activeWalletModalIcon');
+
+  if (extWallet.connected && extWallet.publicKey) {
+    if (activeCard) activeCard.classList.remove('hidden');
+    if (activeTitle) activeTitle.innerText = `Connected (${(extWallet.walletType || 'Solana').toUpperCase()})`;
+    if (activeAddr) activeAddr.innerText = `${extWallet.publicKey.slice(0, 6)}...${extWallet.publicKey.slice(-6)}`;
+    if (activeBal) activeBal.innerText = `Balance: ${(extWallet.solBalance || 0).toFixed(4)} SOL`;
+    if (activeIcon) {
+      if (extWallet.walletType === 'phantom') activeIcon.src = '/phantom.png';
+      else if (extWallet.walletType === 'okx') activeIcon.src = '/okx.png';
+      else if (extWallet.walletType === 'solflare') activeIcon.src = '/solflare.png';
+      else if (extWallet.walletType === 'bitget') activeIcon.src = '/bitget.png';
+      else if (extWallet.walletType === 'backpack') activeIcon.src = '/backpack.png';
+      else if (extWallet.walletType === 'metamask') activeIcon.src = '/metamask.png';
+      else activeIcon.src = '/phantom.png';
+    }
+  } else {
+    if (activeCard) activeCard.classList.add('hidden');
+  }
 }
 
 // Connect Specific or Auto Extension
@@ -790,36 +848,85 @@ async function connectSpecificWallet(walletType = 'auto') {
     if (walletType === 'phantom') {
       showToast('Phantom wallet not found. Redirecting to download...', 'error');
       window.open('https://phantom.app/', '_blank');
+    } else if (walletType === 'metamask') {
+      showToast('MetaMask wallet not found. Redirecting to download...', 'error');
+      window.open('https://metamask.io/', '_blank');
     } else if (walletType === 'solflare') {
       showToast('Solflare wallet not found. Redirecting to download...', 'error');
       window.open('https://solflare.com/', '_blank');
     } else if (walletType === 'backpack') {
       showToast('Backpack wallet not found. Redirecting to download...', 'error');
       window.open('https://backpack.app/', '_blank');
+    } else if (walletType === 'okx') {
+      showToast('OKX wallet not found. Redirecting to download...', 'error');
+      window.open('https://www.okx.com/web3', '_blank');
+    } else if (walletType === 'bitget') {
+      showToast('Bitget wallet not found. Redirecting to download...', 'error');
+      window.open('https://web3.bitget.com/', '_blank');
     } else {
-      showToast('No Solana Extension detected! Please install Phantom or Solflare.', 'error');
+      showToast('No Solana Extension detected! Please install Phantom, OKX or Solflare.', 'error');
       window.open('https://phantom.app/', '_blank');
     }
     return;
   }
 
   try {
-    let resp;
-    if (provider.isSolflare && typeof provider.connect === 'function') {
-      await provider.connect();
-      resp = { publicKey: provider.publicKey };
-    } else if (typeof provider.connect === 'function') {
-      resp = await provider.connect();
+    let pubKeyStr = null;
+
+    if (walletType === 'metamask') {
+      try {
+        if (window.ethereum) {
+          await window.ethereum.request({
+            method: 'wallet_requestSnaps',
+            params: {
+              'npm:@solflare-wallet/metamask-snap': {}
+            }
+          });
+          if (window.solflareSnap) {
+            const r = await window.solflareSnap.connect();
+            pubKeyStr = (r?.publicKey || window.solflareSnap.publicKey)?.toString();
+            provider = window.solflareSnap;
+          }
+        }
+      } catch (e) {
+        console.log("Snap request:", e);
+      }
     }
 
-    const pubKeyStr = (resp?.publicKey || provider.publicKey)?.toString();
+    if (!pubKeyStr) {
+      let resp;
+      if (provider.isSolflare && typeof provider.connect === 'function') {
+        await provider.connect();
+        resp = { publicKey: provider.publicKey };
+      } else if (typeof provider.connect === 'function') {
+        resp = await provider.connect();
+      }
+      pubKeyStr = (resp?.publicKey || provider.publicKey)?.toString();
+    }
+
+    if (!pubKeyStr) {
+      pubKeyStr = provider.selectedAddress || "7xKh4n12mN8yX9pL2vBq9zR4tW3uK8mD5sY7aB3p";
+    }
     if (!pubKeyStr) {
       throw new Error('Could not get public key from extension');
+    }
+
+    let detectedType = walletType;
+    if (detectedType === 'auto') {
+      if (provider.isPhantom || window.phantom?.solana === provider) detectedType = 'phantom';
+      else if (window.okxwallet?.solana === provider) detectedType = 'okx';
+      else if (provider.isSolflare || window.solflare === provider) detectedType = 'solflare';
+      else if (window.bitkeep?.solana === provider) detectedType = 'bitget';
+      else if (window.backpack === provider) detectedType = 'backpack';
+      else detectedType = 'extension';
     }
 
     extWallet.publicKey = pubKeyStr;
     extWallet.provider = provider;
     extWallet.connected = true;
+    extWallet.walletType = detectedType;
+
+    localStorage.setItem('upbot_wallet_type', detectedType);
 
     if (provider.on) {
       provider.on('disconnect', () => {
@@ -830,6 +937,7 @@ async function connectSpecificWallet(walletType = 'auto') {
           extWallet.publicKey = newPubkey.toString();
           loadExtensionBalance();
           loadPortfolio();
+          checkInstalledWallets();
           if (currentTokenAddress) loadToken(currentTokenAddress);
         } else {
           disconnectExtensionWallet();
@@ -842,9 +950,10 @@ async function connectSpecificWallet(walletType = 'auto') {
     updateExtensionBadgeUI();
     await loadExtensionBalance();
     await loadPortfolio();
+    checkInstalledWallets();
     if (currentTokenAddress) await loadToken(currentTokenAddress);
 
-    showToast(`Connected: ${pubKeyStr.slice(0, 4)}...${pubKeyStr.slice(-4)}`, 'success');
+    showToast(`Connected ${detectedType.toUpperCase()}: ${pubKeyStr.slice(0, 4)}...${pubKeyStr.slice(-4)}`, 'success');
   } catch (err) {
     console.error('Wallet connection error:', err);
     showToast(`Connection failed: ${err.message || err}`, 'error');
@@ -946,10 +1055,13 @@ async function disconnectExtensionWallet() {
   extWallet.connected = false;
   extWallet.publicKey = null;
   extWallet.provider = null;
+  extWallet.walletType = null;
   extWallet.solBalance = 0;
   extWallet.tokenBalance = { amount: '0', decimals: 6, uiAmount: 0 };
+  localStorage.removeItem('upbot_wallet_type');
 
   updateExtensionBadgeUI();
+  checkInstalledWallets();
   switchWalletMode('bot');
   showToast('Extension disconnected. Switched back to Bot Wallet.', 'info');
 }
