@@ -1332,13 +1332,25 @@ function setupEventListeners() {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.sell-preset').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
+      const val = btn.dataset.val || btn.dataset.pct || '100';
       const target = document.getElementById('customSellPercent');
-      if (target) target.value = btn.dataset.pct;
+      if (target) target.value = val;
       updateSellEstValue();
     });
   });
 
-  document.getElementById('customSellPercent')?.addEventListener('input', updateSellEstValue);
+  document.getElementById('customSellPercent')?.addEventListener('input', () => {
+    const val = parseFloat(document.getElementById('customSellPercent').value);
+    document.querySelectorAll('.sell-preset').forEach((b) => {
+      const bVal = parseFloat(b.dataset.val || b.dataset.pct);
+      if (bVal === val) {
+        b.classList.add('active');
+      } else {
+        b.classList.remove('active');
+      }
+    });
+    updateSellEstValue();
+  });
 
   // Limit Target Price Inputs Real-time preview & two-way custom % sync
   document.getElementById('limitBuyTargetPrice')?.addEventListener('input', () => {
@@ -1740,10 +1752,28 @@ async function loadToken(address, isBackground = false) {
   }
 }
 
+// Helper to get selected sell percentage reliably
+function getSelectedSellPercent() {
+  const customInput = document.getElementById('customSellPercent');
+  const customVal = customInput ? parseFloat(customInput.value) : NaN;
+  if (!isNaN(customVal) && customVal > 0 && customVal <= 100) {
+    return customVal;
+  }
+  const activeBtn = document.querySelector('.sell-preset.active');
+  if (activeBtn) {
+    const presetVal = parseFloat(activeBtn.dataset.val || activeBtn.dataset.pct);
+    if (!isNaN(presetVal) && presetVal > 0 && presetVal <= 100) {
+      if (customInput) customInput.value = presetVal;
+      return presetVal;
+    }
+  }
+  return 100;
+}
+
 // Update Sell Est. Value
 function updateSellEstValue() {
   if (!currentTokenData) return;
-  const pct = parseFloat(document.getElementById('customSellPercent').value) || 100;
+  const pct = getSelectedSellPercent();
   let totalHolding = 0;
   if (currentWalletMode === 'bot') {
     const rawTxt = document.getElementById('sellAvailTokens').innerText;
@@ -1972,7 +2002,7 @@ async function executeBuy() {
 
 // Execute Sell (Bot or Extension)
 async function executeSell() {
-  const percent = parseFloat(document.getElementById('customSellPercent').value) || 100;
+  const percent = getSelectedSellPercent();
   const btn = document.getElementById('btnExecuteSell');
   btn.disabled = true;
 
