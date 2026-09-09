@@ -166,15 +166,43 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
         return;
       }
 
-      const swapResult = await executeJupiterSwap(imported.keypair, quote, {
+      let activeQuote = quote;
+      let swapResult = await executeJupiterSwap(imported.keypair, activeQuote, {
         priorityFeeLamports,
         slippageBps,
       });
 
+      // Auto-retry with fresh quotes and progressively wider slippage if slippage (Custom 6001) or congestion occurred
+      if (!swapResult.success && (swapResult.error?.includes('6001') || swapResult.error?.toLowerCase().includes('slippage') || swapResult.error?.includes('timeout'))) {
+        const retryTolerances = [
+          Math.min(Math.max(slippageBps * 1.6, 1000), 1500), // 10% - 15%
+          Math.min(Math.max(slippageBps * 2.5, 1500), 2500), // 15% - 25%
+        ];
+
+        for (let i = 0; i < retryTolerances.length; i++) {
+          const retryBps = Math.floor(retryTolerances[i]);
+          console.log(`⚠️ Limit Buy #${order.id} hit slippage error (${swapResult.error}). Retry ${i + 1}/${retryTolerances.length} with fresh quote & ${(retryBps / 100).toFixed(1)}% slippage...`);
+          await new Promise((r) => setTimeout(r, 1200));
+
+          const freshQuote = await getJupiterQuote(CONFIG.WSOL_MINT, order.token_address, lamports, retryBps);
+          if (!freshQuote) continue;
+
+          swapResult = await executeJupiterSwap(imported.keypair, freshQuote, {
+            priorityFeeLamports,
+            slippageBps: retryBps,
+          });
+
+          if (swapResult.success && swapResult.signature) {
+            activeQuote = freshQuote;
+            break;
+          }
+        }
+      }
+
       if (swapResult.success && swapResult.signature) {
         updateLimitOrderStatus(order.id, 'EXECUTED', swapResult.signature);
-        const outEstimate = (parseInt(quote.outAmount) / 1e6).toFixed(2);
-        const rawTokens = parseFloat(outEstimate) || (parseInt(quote.outAmount) / 1e6);
+        const outEstimate = (parseInt(activeQuote.outAmount) / 1e6).toFixed(2);
+        const rawTokens = parseFloat(outEstimate) || (parseInt(activeQuote.outAmount) / 1e6);
         const solPriceUsd = await getSolPriceUsd();
         const executedPriceUsd = rawTokens > 0 ? (solAmount * solPriceUsd) / rawTokens : triggerPrice;
 
@@ -208,12 +236,16 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
             .text(t.btn_trade_dashboard, `token:refresh:${order.token_address}`)
         );
       } else {
-        updateLimitOrderStatus(order.id, 'FAILED', undefined, swapResult.error);
+        const errorMsg = swapResult.error?.includes('6001')
+          ? 'Slippage tolerance exceeded during volatile market swing (Error 6001)'
+          : (swapResult.error || 'Transaction failed');
+        updateLimitOrderStatus(order.id, 'FAILED', undefined, errorMsg);
         await notifyUser(
           bot,
           order.user_id,
           `❌ *Limit Buy Order #${order.id} Execution Failed!*\n\n` +
-            `Error: \`${swapResult.error || 'Transaction failed'}\``
+            `Error: \`${errorMsg}\`\n\n` +
+            `_Market moved too rapidly during execution._`
         );
       }
     } else if (order.order_type === 'SELL_LIMIT') {
@@ -250,14 +282,42 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
         return;
       }
 
-      const swapResult = await executeJupiterSwap(imported.keypair, quote, {
+      let activeQuote = quote;
+      let swapResult = await executeJupiterSwap(imported.keypair, activeQuote, {
         priorityFeeLamports,
         slippageBps,
       });
 
+      // Auto-retry with fresh quotes and progressively wider slippage if slippage (Custom 6001) or congestion occurred
+      if (!swapResult.success && (swapResult.error?.includes('6001') || swapResult.error?.toLowerCase().includes('slippage') || swapResult.error?.includes('timeout'))) {
+        const retryTolerances = [
+          Math.min(Math.max(slippageBps * 1.6, 1000), 1500), // 10% - 15%
+          Math.min(Math.max(slippageBps * 2.5, 1500), 2500), // 15% - 25%
+        ];
+
+        for (let i = 0; i < retryTolerances.length; i++) {
+          const retryBps = Math.floor(retryTolerances[i]);
+          console.log(`⚠️ Limit Sell #${order.id} hit slippage error (${swapResult.error}). Retry ${i + 1}/${retryTolerances.length} with fresh quote & ${(retryBps / 100).toFixed(1)}% slippage...`);
+          await new Promise((r) => setTimeout(r, 1200));
+
+          const freshQuote = await getJupiterQuote(order.token_address, CONFIG.WSOL_MINT, rawAmountToSell.toString(), retryBps);
+          if (!freshQuote) continue;
+
+          swapResult = await executeJupiterSwap(imported.keypair, freshQuote, {
+            priorityFeeLamports,
+            slippageBps: retryBps,
+          });
+
+          if (swapResult.success && swapResult.signature) {
+            activeQuote = freshQuote;
+            break;
+          }
+        }
+      }
+
       if (swapResult.success && swapResult.signature) {
         updateLimitOrderStatus(order.id, 'EXECUTED', swapResult.signature);
-        const outSol = (parseInt(quote.outAmount) / LAMPORTS_PER_SOL).toFixed(4);
+        const outSol = (parseInt(activeQuote.outAmount) / LAMPORTS_PER_SOL).toFixed(4);
         const outSolNum = parseFloat(outSol) || 0;
         const soldAmountTokens = tokenBal.uiAmount * (percent / 100);
         const solPriceUsd = await getSolPriceUsd();
@@ -293,12 +353,16 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
             .text(t.btn_trade_dashboard, `token:refresh:${order.token_address}`)
         );
       } else {
-        updateLimitOrderStatus(order.id, 'FAILED', undefined, swapResult.error);
+        const errorMsg = swapResult.error?.includes('6001')
+          ? 'Slippage tolerance exceeded during volatile market swing (Error 6001)'
+          : (swapResult.error || 'Transaction failed');
+        updateLimitOrderStatus(order.id, 'FAILED', undefined, errorMsg);
         await notifyUser(
           bot,
           order.user_id,
           `❌ *Limit Sell Order #${order.id} Execution Failed!*\n\n` +
-            `Error: \`${swapResult.error || 'Transaction failed'}\``
+            `Error: \`${errorMsg}\`\n\n` +
+            `_Market moved too rapidly during execution._`
         );
       }
     }

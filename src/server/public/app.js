@@ -7,6 +7,332 @@ let activeTradeTab = 'swap';
 let activeSwapMode = 'buy';
 let activeLimitType = 'buy';
 let activeLimitOrders = [];
+let currentChartProvider = localStorage.getItem('quickbot_chart_provider') || 'tradingview';
+let currentChartTimeframe = '15m';
+
+// TradingView Lightweight Charts Native Engine
+let tvChart = null;
+let tvCandleSeries = null;
+let tvVolumeSeries = null;
+let tvPriceLines = [];
+let tvLoadedToken = '';
+let tvLoadedTf = '';
+
+/**
+ * Initialize TradingView Lightweight Charts Native Canvas
+ */
+function initTradingViewNative() {
+  const container = document.getElementById('tvNativeContainer');
+  if (!container || typeof LightweightCharts === 'undefined') return;
+
+  if (tvChart) {
+    try {
+      tvChart.remove();
+    } catch {}
+    tvChart = null;
+    tvCandleSeries = null;
+    tvVolumeSeries = null;
+    tvPriceLines = [];
+  }
+
+  container.innerHTML = '';
+
+  tvChart = LightweightCharts.createChart(container, {
+    width: container.clientWidth || 800,
+    height: container.clientHeight || 540,
+    layout: {
+      background: { type: 'solid', color: '#0d1117' },
+      textColor: '#8b949e',
+      fontFamily: 'Inter, -apple-system, sans-serif',
+      fontSize: 11,
+    },
+    grid: {
+      vertLines: { color: 'rgba(255, 255, 255, 0.04)' },
+      horzLines: { color: 'rgba(255, 255, 255, 0.04)' },
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine: {
+        color: 'rgba(255, 255, 255, 0.25)',
+        width: 1,
+        style: LightweightCharts.LineStyle.Dashed,
+      },
+      horzLine: {
+        color: 'rgba(255, 255, 255, 0.25)',
+        width: 1,
+        style: LightweightCharts.LineStyle.Dashed,
+      },
+    },
+    rightPriceScale: {
+      borderColor: 'rgba(255, 255, 255, 0.08)',
+      scaleMargins: {
+        top: 0.1,
+        bottom: 0.22,
+      },
+      autoScale: true,
+    },
+    timeScale: {
+      borderColor: 'rgba(255, 255, 255, 0.08)',
+      timeVisible: true,
+      secondsVisible: false,
+      barSpacing: 14,
+      minBarSpacing: 3,
+      rightOffset: 12,
+    },
+  });
+
+  tvCandleSeries = tvChart.addCandlestickSeries({
+    upColor: '#00ff88',
+    downColor: '#ff3b30',
+    borderUpColor: '#00ff88',
+    borderDownColor: '#ff3b30',
+    wickUpColor: '#00ff88',
+    wickDownColor: '#ff3b30',
+    priceFormat: {
+      type: 'custom',
+      minMove: 0.00000001,
+      formatter: (price) => {
+        if (!price || price <= 0) return '$0.00';
+        if (price < 0.00001) return '$' + price.toExponential(3);
+        if (price < 0.01) return '$' + price.toFixed(6);
+        if (price < 1) return '$' + price.toFixed(4);
+        return '$' + price.toFixed(2);
+      },
+    },
+  });
+
+  tvVolumeSeries = tvChart.addHistogramSeries({
+    color: 'rgba(41, 98, 255, 0.2)',
+    priceFormat: {
+      type: 'volume',
+    },
+    priceScaleId: 'volume',
+  });
+
+  tvChart.priceScale('volume').applyOptions({
+    scaleMargins: {
+      top: 0.82,
+      bottom: 0,
+    },
+    visible: false,
+  });
+
+  // Auto-resize on window / container resize
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver((entries) => {
+      if (entries[0] && tvChart && container) {
+        const { width, height } = entries[0].contentRect;
+        if (width > 0 && height > 0) {
+          tvChart.applyOptions({ width, height });
+        }
+      }
+    });
+    ro.observe(container);
+  }
+}
+
+/**
+ * Render On-Chart Glued Limit Order Lines in TradingView
+ */
+function renderNativeLimitLines() {
+  if (!tvCandleSeries) return;
+
+  // Clear previous lines
+  tvPriceLines.forEach((pl) => {
+    try {
+      tvCandleSeries.removePriceLine(pl);
+    } catch {}
+  });
+  tvPriceLines = [];
+
+  if (currentChartProvider !== 'tradingview') return;
+  if (!currentTokenAddress) return;
+
+  const targetToken = currentTokenAddress.toLowerCase();
+  const pendingOrders = activeLimitOrders.filter(
+    (o) => o.status === 'PENDING' && o.token_address.toLowerCase() === targetToken
+  );
+
+  pendingOrders.forEach((o) => {
+    const isBuy = o.order_type === 'BUY_LIMIT';
+    const price = o.target_price_usd;
+    const amountStr = isBuy ? `${o.amount_sol} SOL` : `${o.amount_percent}%`;
+    const title = `${isBuy ? 'BUY DIP' : 'SELL TP'} (${amountStr})`;
+
+    const pl = tvCandleSeries.createPriceLine({
+      price: price,
+      color: isBuy ? '#00ff88' : '#ff3b30',
+      lineWidth: 2,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: title,
+    });
+
+    tvPriceLines.push(pl);
+  });
+}
+
+let currentTvCandles = [];
+
+/**
+ * Update current open candle in real-time when a live price tick arrives
+ */
+function updateTvLivePrice(livePrice) {
+  if (!tvCandleSeries || !livePrice || livePrice <= 0) return;
+  if (!currentTvCandles || currentTvCandles.length === 0) return;
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const tfSec = currentChartTimeframe === '1m' ? 60 : (currentChartTimeframe === '5m' ? 300 : (currentChartTimeframe === '15m' ? 900 : (currentChartTimeframe === '1h' ? 3600 : (currentChartTimeframe === '4h' ? 14400 : 86400))));
+  const currentBucket = Math.floor(nowSec / tfSec) * tfSec;
+
+  const lastBar = currentTvCandles[currentTvCandles.length - 1];
+
+  if (lastBar.time === currentBucket) {
+    lastBar.close = livePrice;
+    lastBar.high = Math.max(lastBar.high, livePrice);
+    lastBar.low = Math.min(lastBar.low, livePrice);
+    tvCandleSeries.update(lastBar);
+  } else if (currentBucket > lastBar.time) {
+    const newBar = {
+      time: currentBucket,
+      open: lastBar.close,
+      high: Math.max(lastBar.close, livePrice),
+      low: Math.min(lastBar.close, livePrice),
+      close: livePrice,
+    };
+    currentTvCandles.push(newBar);
+    tvCandleSeries.update(newBar);
+  }
+}
+
+/**
+ * Load Candlestick Bars for Native TradingView
+ */
+async function loadTvCandles(tokenAddress, timeframe, force = false, isBackground = false) {
+  if (!tokenAddress) return;
+  const cleanAddr = tokenAddress.trim();
+
+  if (!tvChart) {
+    initTradingViewNative();
+  }
+  if (!tvCandleSeries) return;
+
+  if (!force && !isBackground && tvLoadedToken === cleanAddr && tvLoadedTf === timeframe) {
+    renderNativeLimitLines();
+    return;
+  }
+
+  try {
+    const res = await safeFetchJson(`/api/token/${cleanAddr}/candles?timeframe=${timeframe}`);
+    if (res.success && Array.isArray(res.candles) && res.candles.length > 0) {
+      const candles = res.candles;
+      currentTvCandles = candles;
+      tvCandleSeries.setData(candles);
+
+      const volumes = candles.map((c) => ({
+        time: c.time,
+        value: c.volume,
+        color: c.close >= c.open ? 'rgba(0, 255, 136, 0.25)' : 'rgba(255, 59, 48, 0.25)',
+      }));
+      tvVolumeSeries?.setData(volumes);
+
+      tvLoadedToken = cleanAddr;
+      tvLoadedTf = timeframe;
+
+      if (!isBackground) {
+        if (candles.length > 30) {
+          tvChart?.timeScale().fitContent();
+        } else {
+          tvChart?.timeScale().applyOptions({
+            barSpacing: 12,
+            rightOffset: 12,
+          });
+          tvChart?.timeScale().scrollToRealTime();
+        }
+      }
+      renderNativeLimitLines();
+    }
+  } catch (err) {
+    console.warn('Error loading TV candles:', err);
+  }
+}
+
+/**
+ * Chart Provider Handler (TradingView / Birdeye / GeckoTerminal / DexScreener)
+ */
+function updateChartDisplay(force = false) {
+  const chartFrame = document.getElementById('dexChartFrame');
+  const tvContainer = document.getElementById('tvNativeContainer');
+  const tfGroup = document.getElementById('chartTfGroup');
+  const extLink = document.getElementById('chartExtLink');
+  const overlay = document.getElementById('limitLinesOverlay');
+  if (!currentTokenAddress) return;
+
+  const tokenAddress = currentTokenAddress;
+  const isSol = tokenAddress.toLowerCase() === 'so11111111111111111111111111111111111111112' || (currentTokenData?.symbol || '').toUpperCase() === 'SOL';
+  const pairAddress = currentTokenData?.pairAddress || '';
+
+  // Update button active states
+  document.querySelectorAll('.chart-provider-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.provider === currentChartProvider);
+  });
+
+  if (currentChartProvider === 'tradingview') {
+    // Show Native TV Container, Hide Iframe & HTML Overlay
+    tvContainer?.classList.remove('hidden');
+    chartFrame?.classList.add('hidden');
+    tfGroup?.classList.remove('hidden');
+    if (overlay) overlay.style.display = 'none';
+
+    if (extLink) {
+      extLink.href = isSol
+        ? 'https://www.tradingview.com/chart/?symbol=BINANCE:SOLUSDT'
+        : `https://birdeye.so/token/${tokenAddress}?chain=solana`;
+    }
+
+    loadTvCandles(tokenAddress, currentChartTimeframe, force);
+  } else {
+    // Show Iframe, Hide Native TV Container
+    tvContainer?.classList.add('hidden');
+    chartFrame?.classList.remove('hidden');
+    tfGroup?.classList.add('hidden');
+    if (overlay) overlay.style.display = '';
+
+    let chartUrl = '';
+    let externalUrl = '';
+
+    if (currentChartProvider === 'birdeye') {
+      chartUrl = `https://birdeye.so/tv-widget/${tokenAddress}?chain=solana&chartType=candle&chartInterval=15&theme=dark`;
+      externalUrl = `https://birdeye.so/token/${tokenAddress}?chain=solana`;
+    } else if (currentChartProvider === 'geckoterminal') {
+      chartUrl = `https://www.geckoterminal.com/solana/tokens/${tokenAddress}?embed=1&info=0&swaps=0&grayscale=0&light_chart=0`;
+      externalUrl = `https://www.geckoterminal.com/solana/tokens/${tokenAddress}`;
+    } else {
+      // DexScreener
+      const chartTarget = pairAddress || tokenAddress;
+      chartUrl = `https://dexscreener.com/solana/${chartTarget}?embed=1&theme=dark&trades=0&info=0`;
+      externalUrl = `https://dexscreener.com/solana/${chartTarget}`;
+    }
+
+    if (extLink) extLink.href = externalUrl;
+
+    if (chartFrame) {
+      const currentLoaded = chartFrame.getAttribute('data-loaded-src');
+      if (force || currentLoaded !== chartUrl) {
+        chartFrame.setAttribute('data-loaded-src', chartUrl);
+        chartFrame.src = chartUrl;
+      }
+    }
+  }
+}
+
+function setChartProvider(provider) {
+  currentChartProvider = provider;
+  try {
+    localStorage.setItem('quickbot_chart_provider', provider);
+  } catch {}
+  updateChartDisplay(true);
+}
 
 // Default Watchlist Coins
 const DEFAULT_FAVORITES = [
@@ -82,6 +408,7 @@ async function safeFetchJson(url, options = {}) {
 function initTerminal() {
   try {
     setupEventListeners();
+    updateChartDisplay(true);
   } catch (e) {
     console.error('Error in setupEventListeners:', e);
   }
@@ -107,7 +434,7 @@ function initTerminal() {
 
   const tokenInput = document.getElementById('tokenInput');
   if (tokenInput) {
-    tokenInput.value = currentTokenAddress;
+    tokenInput.value = '';
   }
 
   // 1. Immediately render watchlist chips
@@ -134,13 +461,21 @@ function initTerminal() {
         loadExtensionBalance();
       }
       if (currentTokenAddress) {
-        loadToken(currentTokenAddress, true);
+        setTimeout(() => {
+          loadToken(currentTokenAddress, true);
+        }, 1000);
       }
-    }, 3000);
+    }, 6000);
 
     setInterval(() => {
       updateWatchlistPrices();
     }, 10000);
+
+    setInterval(() => {
+      if (currentChartProvider === 'tradingview' && currentTokenAddress) {
+        loadTvCandles(currentTokenAddress, currentChartTimeframe, false, true);
+      }
+    }, 12000);
   }
 }
 
@@ -553,6 +888,9 @@ function renderChartLimitLines() {
   } else if (strip) {
     strip.classList.add('hidden');
   }
+
+  // Also update native TradingView on-chart glued lines
+  renderNativeLimitLines();
 
   // Render on-chart lines with accurate vertical coordinates & drag grip
   let html = '';
@@ -1192,9 +1530,9 @@ async function renderTokenSearchDropdown(query) {
         e.stopPropagation();
         dropdown.classList.add('hidden');
         const input = document.getElementById('tokenInput');
-        if (input) input.value = token.address;
+        if (input) input.value = '';
         const clearBtn = document.getElementById('btnClearSearch');
-        if (clearBtn) clearBtn.classList.remove('hidden');
+        if (clearBtn) clearBtn.classList.add('hidden');
         loadToken(token.address);
       };
 
@@ -1253,7 +1591,11 @@ function handleLoadTokenClick() {
   const dropdown = document.getElementById('searchDropdownResults');
   if (dropdown) dropdown.classList.add('hidden');
   if (input && input.value.trim()) {
-    loadToken(input.value.trim());
+    const val = input.value.trim();
+    input.value = '';
+    const clearBtn = document.getElementById('btnClearSearch');
+    if (clearBtn) clearBtn.classList.add('hidden');
+    loadToken(val);
   }
 }
 window.handleLoadTokenClick = handleLoadTokenClick;
@@ -1262,6 +1604,28 @@ window.handleLoadTokenClick = handleLoadTokenClick;
 function setupEventListeners() {
   // Load Token Input
   document.getElementById('btnLoadToken')?.addEventListener('click', handleLoadTokenClick);
+
+  // Chart Provider Buttons (TradingView / GeckoTerminal / DexScreener)
+  document.querySelectorAll('.chart-provider-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const provider = btn.dataset.provider;
+      if (provider) {
+        setChartProvider(provider);
+      }
+    });
+  });
+
+  // Timeframe Buttons (1m, 5m, 15m, 1h, 4h, 1D)
+  document.querySelectorAll('.chart-tf-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.chart-tf-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentChartTimeframe = btn.dataset.tf || '15m';
+      if (currentChartProvider === 'tradingview') {
+        loadTvCandles(currentTokenAddress, currentChartTimeframe, true);
+      }
+    });
+  });
 
   // Top Tabs: Instant Swap vs Limit Orders
   document.querySelectorAll('.trade-tab').forEach((btn) => {
@@ -1616,7 +1980,9 @@ async function loadToken(address, isBackground = false) {
 
   const tokenInput = document.getElementById('tokenInput');
   if (tokenInput && !isBackground) {
-    tokenInput.value = trimmed;
+    tokenInput.value = '';
+    const clearBtn = document.getElementById('btnClearSearch');
+    if (clearBtn) clearBtn.classList.add('hidden');
   }
 
   try {
@@ -1641,9 +2007,25 @@ async function loadToken(address, isBackground = false) {
 
     currentTokenData = data.token;
 
+    // Real-time live price tick update for TradingView chart candle
+    if (currentChartProvider === 'tradingview' && currentTokenData.priceUsd > 0) {
+      updateTvLivePrice(currentTokenData.priceUsd);
+    }
+
     // Header updates
     document.getElementById('tokenSymbol').innerText = `$${currentTokenData.symbol}`;
     document.getElementById('tokenName').innerText = currentTokenData.name;
+
+    // Update Contract Address badge
+    const caShortEl = document.getElementById('tokenCaShort');
+    if (caShortEl) {
+      caShortEl.innerText = `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`;
+    }
+    const caPill = document.getElementById('tokenCaPill');
+    if (caPill) {
+      caPill.title = `Click to copy Contract Address: ${trimmed}`;
+    }
+
     document.getElementById('tokenPriceUsd').innerText =
       currentTokenData.priceUsd < 0.01 ? `$${currentTokenData.priceUsd.toFixed(6)}` : `$${currentTokenData.priceUsd.toFixed(4)}`;
 
@@ -1696,16 +2078,9 @@ async function loadToken(address, isBackground = false) {
     document.getElementById('tokenVolume24h').innerText = formatBigNumber(currentTokenData.volume24h);
     document.getElementById('tokenShortChanges').innerText = `${currentTokenData.priceChange5m || 0}% / ${currentTokenData.priceChange1h || 0}%`;
 
-    // Chart Update (DexScreener Live Embed)
+    // Chart Update (TradingView / GeckoTerminal / DexScreener)
     if (!isBackground) {
-      const chartFrame = document.getElementById('dexChartFrame');
-      if (chartFrame) {
-        const chartTarget = currentTokenData.pairAddress || trimmed;
-        const newSrc = `https://dexscreener.com/solana/${chartTarget}?embed=1&theme=dark&trades=0&info=0`;
-        if (chartFrame.src !== newSrc) {
-          chartFrame.src = newSrc;
-        }
-      }
+      updateChartDisplay(false);
     }
 
     // Wallet Position Display

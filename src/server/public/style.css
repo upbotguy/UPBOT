@@ -275,6 +275,52 @@ body {
   transform: scale(1.1);
 }
 
+/* Token Contract Address Copy Pill */
+.token-ca-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+  margin-left: 4px;
+}
+
+.token-ca-pill:hover {
+  background: rgba(20, 241, 149, 0.12);
+  border-color: var(--primary-green);
+  color: #ffffff;
+}
+
+.token-ca-pill .ca-tag {
+  color: var(--solana-cyan);
+  font-weight: 700;
+  font-size: 10px;
+}
+
+.token-ca-pill .ca-code {
+  color: var(--text-main);
+  font-weight: 600;
+}
+
+.token-ca-pill .copy-icon {
+  opacity: 0.65;
+  transition: all 0.15s ease;
+}
+
+.token-ca-pill:hover .copy-icon {
+  opacity: 1;
+  color: var(--primary-green);
+  transform: scale(1.1);
+}
+
 .nav-center {
   flex: 1;
   max-width: 500px;
@@ -783,6 +829,138 @@ body {
   color: #FF3B30;
 }
 
+/* Chart Controls Header & Provider Switcher */
+.chart-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chart-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chart-provider-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.chart-provider-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+}
+
+.chart-provider-btn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.chart-provider-btn.active {
+  background: #2962FF;
+  color: #ffffff;
+  border-color: #2962FF;
+  box-shadow: 0 2px 8px rgba(41, 98, 255, 0.35);
+}
+
+.chart-provider-btn[data-provider="birdeye"].active {
+  background: #E43657;
+  color: #ffffff;
+  border-color: #E43657;
+  box-shadow: 0 2px 8px rgba(228, 54, 87, 0.35);
+}
+
+.chart-provider-btn[data-provider="geckoterminal"].active {
+  background: #8DC63F;
+  color: #0b101b;
+  border-color: #8DC63F;
+  box-shadow: 0 2px 8px rgba(141, 198, 63, 0.35);
+}
+
+.chart-provider-btn[data-provider="dexscreener"].active {
+  background: #11998e;
+  color: #ffffff;
+  border-color: #11998e;
+  box-shadow: 0 2px 8px rgba(17, 153, 142, 0.35);
+}
+
+/* Timeframe Selector */
+.chart-tf-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.chart-tf-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chart-tf-btn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.chart-tf-btn.active {
+  background: #2962FF;
+  color: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 1px 4px rgba(41, 98, 255, 0.4);
+}
+
+.chart-ext-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.chart-ext-btn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
 /* Chart Container & Live Limit Lines Overlay */
 .chart-container {
   position: relative;
@@ -794,7 +972,25 @@ body {
   overflow: hidden;
 }
 
+.tv-native-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  background: #0d1117;
+}
+
+.tv-native-container.hidden {
+  display: none !important;
+}
+
 .chart-container iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
   width: 100%;
   height: 100%;
   border: none;

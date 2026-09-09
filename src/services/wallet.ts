@@ -6,7 +6,87 @@ import { derivePath } from 'ed25519-hd-key';
 import { CONFIG } from '../config.js';
 import { fetchTokenInfo, fetchLiveTokenPrices, TokenInfo } from './token.js';
 
-export const connection = new Connection(CONFIG.SOLANA_RPC_URL, 'confirmed');
+// Leaky-bucket / Sliding-window Rate Limiter for Solana RPC requests
+// Strictly limits outbound calls to 7 req/sec (Helius free tier limit is 10 req/sec)
+class RpcRateLimiter {
+  private queue: Array<() => void> = [];
+  private timestamps: number[] = [];
+  private readonly maxRequestsPerSecond = 7;
+  private isProcessing = false;
+
+  async schedule<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.queue.push(async () => {
+        try {
+          const res = await fn();
+          resolve(res);
+        } catch (err) {
+          reject(err);
+        }
+      });
+      this.processQueue();
+    });
+  }
+
+  private async processQueue() {
+    if (this.isProcessing) return;
+    this.isProcessing = true;
+
+    while (this.queue.length > 0) {
+      const now = Date.now();
+      // Keep only timestamps within the last 1000ms window
+      this.timestamps = this.timestamps.filter((t) => now - t < 1000);
+
+      if (this.timestamps.length >= this.maxRequestsPerSecond) {
+        const oldest = this.timestamps[0];
+        const waitTime = Math.max(1050 - (now - oldest), 50);
+        await new Promise((r) => setTimeout(r, waitTime));
+        continue;
+      }
+
+      const next = this.queue.shift();
+      if (next) {
+        this.timestamps.push(Date.now());
+        next();
+        // 70ms minimum gap to prevent network bursts
+        await new Promise((r) => setTimeout(r, 70));
+      }
+    }
+
+    this.isProcessing = false;
+  }
+}
+
+export const rpcLimiter = new RpcRateLimiter();
+
+// Custom rate-limited fetch for @solana/web3.js Connection
+const rateLimitedRpcFetch = async (url: any, options: any) => {
+  return rpcLimiter.schedule(async () => {
+    let attempts = 0;
+    while (attempts < 3) {
+      attempts++;
+      try {
+        const res = await fetch(url, options);
+        if (res.status === 429) {
+          const backoff = 600 * attempts + Math.floor(Math.random() * 200);
+          await new Promise((r) => setTimeout(r, backoff));
+          continue;
+        }
+        return res;
+      } catch (err) {
+        if (attempts >= 3) throw err;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+    return fetch(url, options);
+  });
+};
+
+export const connection = new Connection(CONFIG.SOLANA_RPC_URL, {
+  commitment: 'confirmed',
+  fetch: rateLimitedRpcFetch,
+  confirmTransactionInitialTimeout: 35000,
+});
 
 /**
  * Generate a brand new Solana Keypair
@@ -114,10 +194,12 @@ export function importWalletAuto(input: string): { keypair: Keypair; publicKey: 
 
 const solBalanceCache = new Map<string, { balance: number; timestamp: number }>();
 const tokenBalanceCache = new Map<string, { data: { uiAmount: number; decimals: number; amount: string }; timestamp: number }>();
-const BALANCE_CACHE_TTL_MS = 2000; // 2s fast balance cache
+const inFlightSolBalance = new Map<string, Promise<number>>();
+const inFlightTokenBalance = new Map<string, Promise<{ uiAmount: number; decimals: number; amount: string }>>();
+const BALANCE_CACHE_TTL_MS = 8000; // 8s cache to safely avoid RPC 429
 
 /**
- * Fetch SOL Balance for a public key
+ * Fetch SOL Balance for a public key with caching and in-flight deduplication
  */
 export async function getSolBalance(publicKeyStr: string, forceRefresh = false): Promise<number> {
   const cached = solBalanceCache.get(publicKeyStr);
@@ -125,21 +207,33 @@ export async function getSolBalance(publicKeyStr: string, forceRefresh = false):
     return cached.balance;
   }
 
-  try {
-    const pubkey = new PublicKey(publicKeyStr);
-    const balanceLamports = await connection.getBalance(pubkey);
-    const bal = balanceLamports / LAMPORTS_PER_SOL;
-    solBalanceCache.set(publicKeyStr, { balance: bal, timestamp: Date.now() });
-    return bal;
-  } catch (error) {
-    if (cached) return cached.balance;
-    console.error(`Error fetching SOL balance for ${publicKeyStr}:`, error);
-    return 0;
+  // Deduplicate simultaneous requests for same public key
+  if (!forceRefresh && inFlightSolBalance.has(publicKeyStr)) {
+    return inFlightSolBalance.get(publicKeyStr)!;
   }
+
+  const fetchPromise = (async () => {
+    try {
+      const pubkey = new PublicKey(publicKeyStr);
+      const balanceLamports = await connection.getBalance(pubkey);
+      const bal = balanceLamports / LAMPORTS_PER_SOL;
+      solBalanceCache.set(publicKeyStr, { balance: bal, timestamp: Date.now() });
+      return bal;
+    } catch (error) {
+      if (cached) return cached.balance;
+      console.error(`Error fetching SOL balance for ${publicKeyStr}:`, error);
+      return 0;
+    } finally {
+      inFlightSolBalance.delete(publicKeyStr);
+    }
+  })();
+
+  inFlightSolBalance.set(publicKeyStr, fetchPromise);
+  return fetchPromise;
 }
 
 /**
- * Fetch SPL Token balance for a given wallet and token mint
+ * Fetch SPL Token balance for a given wallet and token mint with caching and in-flight deduplication
  */
 export async function getTokenBalance(
   walletAddress: string,
@@ -153,51 +247,62 @@ export async function getTokenBalance(
     return cached.data;
   }
 
-  try {
-    const walletPubkey = new PublicKey(walletAddress);
-    const mintPubkey = new PublicKey(tokenMintAddress);
-
-    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(walletPubkey, {
-      mint: mintPubkey,
-    });
-
-    if (tokenAccounts.value.length === 0) {
-      // Check Token-2022 Program if standard query returns empty
-      try {
-        const token2022Accounts = await connection.getParsedTokenAccountsByOwner(walletPubkey, {
-          mint: mintPubkey,
-          programId: TOKEN_2022_PROGRAM_ID,
-        });
-        if (token2022Accounts.value.length > 0) {
-          const accountInfo = token2022Accounts.value[0].account.data.parsed.info.tokenAmount;
-          const res = {
-            uiAmount: accountInfo.uiAmount || 0,
-            decimals: accountInfo.decimals || 0,
-            amount: accountInfo.amount || '0',
-          };
-          tokenBalanceCache.set(cacheKey, { data: res, timestamp: Date.now() });
-          return res;
-        }
-      } catch {}
-
-      const zero = { uiAmount: 0, decimals: 0, amount: '0' };
-      tokenBalanceCache.set(cacheKey, { data: zero, timestamp: Date.now() });
-      return zero;
-    }
-
-    const accountInfo = tokenAccounts.value[0].account.data.parsed.info.tokenAmount;
-    const res = {
-      uiAmount: accountInfo.uiAmount || 0,
-      decimals: accountInfo.decimals || 0,
-      amount: accountInfo.amount || '0',
-    };
-    tokenBalanceCache.set(cacheKey, { data: res, timestamp: Date.now() });
-    return res;
-  } catch (error) {
-    if (cached) return cached.data;
-    console.error(`Error fetching token balance:`, error);
-    return { uiAmount: 0, decimals: 0, amount: '0' };
+  if (!forceRefresh && inFlightTokenBalance.has(cacheKey)) {
+    return inFlightTokenBalance.get(cacheKey)!;
   }
+
+  const fetchPromise = (async () => {
+    try {
+      const walletPubkey = new PublicKey(walletAddress);
+      const mintPubkey = new PublicKey(tokenMintAddress);
+
+      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(walletPubkey, {
+        mint: mintPubkey,
+      });
+
+      if (tokenAccounts.value.length === 0) {
+        // Check Token-2022 Program if standard query returns empty
+        try {
+          const token2022Accounts = await connection.getParsedTokenAccountsByOwner(walletPubkey, {
+            mint: mintPubkey,
+            programId: TOKEN_2022_PROGRAM_ID,
+          });
+          if (token2022Accounts.value.length > 0) {
+            const accountInfo = token2022Accounts.value[0].account.data.parsed.info.tokenAmount;
+            const res = {
+              uiAmount: accountInfo.uiAmount || 0,
+              decimals: accountInfo.decimals || 0,
+              amount: accountInfo.amount || '0',
+            };
+            tokenBalanceCache.set(cacheKey, { data: res, timestamp: Date.now() });
+            return res;
+          }
+        } catch {}
+
+        const zero = { uiAmount: 0, decimals: 0, amount: '0' };
+        tokenBalanceCache.set(cacheKey, { data: zero, timestamp: Date.now() });
+        return zero;
+      }
+
+      const accountInfo = tokenAccounts.value[0].account.data.parsed.info.tokenAmount;
+      const res = {
+        uiAmount: accountInfo.uiAmount || 0,
+        decimals: accountInfo.decimals || 0,
+        amount: accountInfo.amount || '0',
+      };
+      tokenBalanceCache.set(cacheKey, { data: res, timestamp: Date.now() });
+      return res;
+    } catch (error) {
+      if (cached) return cached.data;
+      console.error(`Error fetching token balance:`, error);
+      return { uiAmount: 0, decimals: 0, amount: '0' };
+    } finally {
+      inFlightTokenBalance.delete(cacheKey);
+    }
+  })();
+
+  inFlightTokenBalance.set(cacheKey, fetchPromise);
+  return fetchPromise;
 }
 
 /**
@@ -240,18 +345,31 @@ export interface WalletPortfolio {
 
 const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
-/**
- * Fetch complete token holdings / portfolio for a wallet address
- */
-export async function getWalletPortfolio(walletAddress: string): Promise<WalletPortfolio> {
-  const pubkey = new PublicKey(walletAddress);
-  const [solBalance, solTokenInfo] = await Promise.all([
-    getSolBalance(walletAddress, true),
-    fetchTokenInfo('So11111111111111111111111111111111111111112'),
-  ]);
+const portfolioCache = new Map<string, { data: WalletPortfolio; timestamp: number }>();
+const inFlightPortfolio = new Map<string, Promise<WalletPortfolio>>();
 
-  const solPriceUsd = solTokenInfo?.priceUsd || 0;
-  const solValueUsd = solBalance * solPriceUsd;
+/**
+ * Fetch complete token holdings / portfolio for a wallet address with caching and in-flight deduplication
+ */
+export async function getWalletPortfolio(walletAddress: string, forceRefresh = false): Promise<WalletPortfolio> {
+  const cached = portfolioCache.get(walletAddress);
+  if (!forceRefresh && cached && Date.now() - cached.timestamp < BALANCE_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  if (!forceRefresh && inFlightPortfolio.has(walletAddress)) {
+    return inFlightPortfolio.get(walletAddress)!;
+  }
+
+  const fetchPromise = (async () => {
+    const pubkey = new PublicKey(walletAddress);
+    const [solBalance, solTokenInfo] = await Promise.all([
+      getSolBalance(walletAddress, forceRefresh),
+      fetchTokenInfo('So11111111111111111111111111111111111111112'),
+    ]);
+
+    const solPriceUsd = solTokenInfo?.priceUsd || 0;
+    const solValueUsd = solBalance * solPriceUsd;
 
   try {
     // Query both legacy SPL Token Program and modern Token-2022 Program in parallel
@@ -323,7 +441,7 @@ export async function getWalletPortfolio(walletAddress: string): Promise<WalletP
     const totalTokenValueUsd = tokens.reduce((sum, t) => sum + t.valueUsd, 0);
     const totalValueUsd = solValueUsd + totalTokenValueUsd;
 
-    return {
+    const result: WalletPortfolio = {
       solBalance,
       solPriceUsd,
       solValueUsd,
@@ -331,9 +449,11 @@ export async function getWalletPortfolio(walletAddress: string): Promise<WalletP
       totalValueUsd,
       walletAddress,
     };
+    portfolioCache.set(walletAddress, { data: result, timestamp: Date.now() });
+    return result;
   } catch (error) {
     console.error('Error fetching wallet portfolio:', error);
-    return {
+    const fallback: WalletPortfolio = {
       solBalance,
       solPriceUsd,
       solValueUsd,
@@ -341,6 +461,14 @@ export async function getWalletPortfolio(walletAddress: string): Promise<WalletP
       totalValueUsd: solValueUsd,
       walletAddress,
     };
+    if (cached) return cached.data;
+    return fallback;
+  } finally {
+    inFlightPortfolio.delete(walletAddress);
   }
+  })();
+
+  inFlightPortfolio.set(walletAddress, fetchPromise);
+  return fetchPromise;
 }
 

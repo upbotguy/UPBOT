@@ -11,7 +11,7 @@ import {
   DBCopyTarget,
 } from '../db/index.js';
 import { CONFIG } from '../config.js';
-import { importWalletAuto, getTokenBalance, getSolBalance, formatAddress } from './wallet.js';
+import { connection, importWalletAuto, getTokenBalance, getSolBalance, formatAddress } from './wallet.js';
 import { fetchTokenInfo, formatCurrency } from './token.js';
 import { getJupiterQuote, executeJupiterSwap } from './swap.js';
 import { MyContext } from '../bot/conversations.js';
@@ -34,17 +34,10 @@ function addProcessedSignature(sig: string) {
   processedSignatures.add(sig);
 }
 
-const connection = new Connection(CONFIG.SOLANA_RPC_URL, {
-  commitment: 'confirmed',
-  wsEndpoint: CONFIG.SOLANA_RPC_URL.startsWith('http')
-    ? CONFIG.SOLANA_RPC_URL.replace('http', 'ws')
-    : undefined,
-});
-
 /**
  * Start the Copy-Trading Engine
  */
-export function startCopyEngine(bot: Bot<MyContext>, pollIntervalMs = 800) {
+export function startCopyEngine(bot: Bot<MyContext>, pollIntervalMs = 2500) {
   if (isCopyEngineRunning) return;
   isCopyEngineRunning = true;
   console.log(`⚡ Copy-Trading Engine started (Monitoring active target wallets every ${pollIntervalMs}ms)...`);

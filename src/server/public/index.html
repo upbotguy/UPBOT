@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="style.css">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/@solana/web3.js@1.95.8/lib/index.iife.min.js"></script>
+  <script src="lightweight-charts.js"></script>
 </head>
 <body>
   <!-- Top Navigation -->
@@ -95,6 +96,11 @@
             <div class="symbol-fav-row">
               <h1 id="tokenSymbol">$SOL</h1>
               <button id="btnStarTokenHeader" class="btn-star-header" onclick="toggleCurrentFavorite()" title="Favorite this token"><svg class="svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg></button>
+              <div class="token-ca-pill" id="tokenCaPill" onclick="copyToClipboard(currentTokenAddress, 'Contract Address')" title="Click to copy Contract Address">
+                <span class="ca-tag">CA:</span>
+                <span id="tokenCaShort" class="ca-code">So11...1112</span>
+                <svg class="svg-icon copy-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              </div>
             </div>
             <span id="tokenName" class="token-full-name">Wrapped SOL</span>
             <span id="tokenDex" class="dex-pill">Raydium</span>
@@ -154,9 +160,54 @@
         <div class="strip-items" id="activeOrderStripItems"></div>
       </div>
 
+      <!-- Chart Controls Header (TradingView / GeckoTerminal / DexScreener Selector) -->
+      <div class="chart-header-bar">
+        <div class="chart-header-left">
+          <div class="chart-provider-group">
+            <button class="chart-provider-btn active" id="btnProviderTV" data-provider="tradingview" title="TradingView Real-Time Chart">
+              <svg class="svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+              TradingView
+            </button>
+            <button class="chart-provider-btn" id="btnProviderBirdeye" data-provider="birdeye" title="Birdeye TV Embed">
+              <svg class="svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+              Birdeye TV
+            </button>
+            <button class="chart-provider-btn" id="btnProviderGecko" data-provider="geckoterminal" title="GeckoTerminal TradingView Chart">
+              <svg class="svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="4"/><circle cx="8.5" cy="8.5" r="1.5"/><circle cx="15.5" cy="8.5" r="1.5"/><path d="M9 15c1 1 5 1 6 0"/></svg>
+              GeckoTerminal
+            </button>
+            <button class="chart-provider-btn" id="btnProviderDex" data-provider="dexscreener" title="DexScreener Chart">
+              <svg class="svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/></svg>
+              DexScreener
+            </button>
+          </div>
+
+          <!-- Timeframe Selector for TradingView -->
+          <div class="chart-tf-group" id="chartTfGroup">
+            <button class="chart-tf-btn" data-tf="1m">1m</button>
+            <button class="chart-tf-btn" data-tf="5m">5m</button>
+            <button class="chart-tf-btn active" data-tf="15m">15m</button>
+            <button class="chart-tf-btn" data-tf="1h">1h</button>
+            <button class="chart-tf-btn" data-tf="4h">4h</button>
+            <button class="chart-tf-btn" data-tf="1D">1D</button>
+          </div>
+        </div>
+
+        <div class="chart-external-links">
+          <a id="chartExtLink" href="https://birdeye.so" target="_blank" rel="noopener noreferrer" class="chart-ext-btn" title="Open Full Chart in New Tab">
+            <svg class="svg-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            Expand
+          </a>
+        </div>
+      </div>
+
       <!-- Chart Frame Container with Visual Target Lines Layer -->
       <div class="chart-container" id="chartContainer">
-        <iframe id="dexChartFrame" src="https://dexscreener.com/solana/So11111111111111111111111111111111111111112?embed=1&theme=dark&trades=0&info=0"></iframe>
+        <!-- Native TradingView Lightweight Canvas Container -->
+        <div id="tvNativeContainer" class="tv-native-container"></div>
+
+        <!-- Fallback / Multi-provider Embed Iframe -->
+        <iframe id="dexChartFrame" class="hidden" src="https://birdeye.so/tv-widget/So11111111111111111111111111111111111111112?chain=solana&chartType=candle&chartInterval=15&theme=dark"></iframe>
         
         <!-- Live Visual Limit Order Price Lines Overlay -->
         <div class="limit-lines-overlay" id="limitLinesOverlay"></div>

@@ -103,13 +103,15 @@ export async function executeJupiterSwap(
       prioritizationFeeConfig = priorityFee;
     }
 
-    // 2. Request serialized transaction from Jupiter Swap API
+    // 2. Request serialized transaction from Jupiter Swap API with Dynamic Slippage
+    const maxSlippageBps = Math.max(options?.slippageBps || 500, 1500);
     const swapReqBody = {
       quoteResponse,
       userPublicKey: keypair.publicKey.toBase58(),
       wrapAndUnwrapSol: true,
       dynamicComputeUnitLimit: true,
       prioritizationFeeLamports: prioritizationFeeConfig,
+      dynamicSlippage: { maxBps: maxSlippageBps },
     };
 
     const swapRes = await axios.post(CONFIG.JUPITER_SWAP_API, swapReqBody, {
@@ -135,10 +137,13 @@ export async function executeJupiterSwap(
       maxRetries: 0,
     });
 
-    // 5. Active Rebroadcast Loop (Every 400ms) to hit moving leader schedule without delay
+    // 5. Throttled Rebroadcast Loop (Every 2500ms, max 3 attempts) to prevent RPC flooding
     let isTerminated = false;
+    let rebroadcastCount = 0;
+    const maxRebroadcasts = 3;
     const rebroadcastTimer = setInterval(async () => {
-      if (isTerminated) return;
+      if (isTerminated || rebroadcastCount >= maxRebroadcasts) return;
+      rebroadcastCount++;
       try {
         await connection.sendRawTransaction(rawTransaction, {
           skipPreflight: true,
@@ -147,9 +152,9 @@ export async function executeJupiterSwap(
       } catch {
         // ignore duplicate / inflight errors
       }
-    }, 400);
+    }, 2500);
 
-    // 6. Fast Signature Status Polling Loop (Every 300ms)
+    // 6. Signature Status Polling Loop (Every 1800ms)
     const startTime = Date.now();
     let confirmed = false;
     let finalError: string | undefined;
@@ -178,7 +183,7 @@ export async function executeJupiterSwap(
         // ignore transient rpc check errors
       }
 
-      await new Promise((r) => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, 1800));
     }
 
     isTerminated = true;

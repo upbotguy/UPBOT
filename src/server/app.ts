@@ -49,7 +49,7 @@ import {
   getWalletPortfolio,
   isValidSolanaAddress,
 } from '../services/wallet.js';
-import { fetchTokenInfo, fetchLiveTokenPrices, searchTokens, getSolPriceUsd } from '../services/token.js';
+import { fetchTokenInfo, fetchLiveTokenPrices, searchTokens, getSolPriceUsd, fetchTokenOHLCV } from '../services/token.js';
 import { getJupiterQuote, executeJupiterSwap } from '../services/swap.js';
 import { generatePnLCard } from '../services/pnlCard.js';
 
@@ -90,7 +90,7 @@ export function createWebServer() {
   app.get('/api/status', async (req, res) => {
     try {
       const { userId, activeWallet } = getWebActiveWallet();
-      const solBalance = activeWallet ? await getSolBalance(activeWallet.publicKey, true) : 0;
+      const solBalance = activeWallet ? await getSolBalance(activeWallet.publicKey, false) : 0;
       const settings = getUserSettings(userId);
 
       const walletPayload = activeWallet
@@ -127,7 +127,7 @@ export function createWebServer() {
         wallets.map(async (w) => ({
           publicKey: w.publicKey,
           isActive: w.isActive,
-          balanceSol: await getSolBalance(w.publicKey, true),
+          balanceSol: await getSolBalance(w.publicKey, false),
         }))
       );
       res.json({ success: true, wallets: walletsWithBal });
@@ -330,8 +330,8 @@ export function createWebServer() {
 
       const [token, tokenBal, solBal, solPriceUsd] = await Promise.all([
         fetchTokenInfo(address, true),
-        targetPubkey ? getTokenBalance(targetPubkey, address, true) : Promise.resolve({ uiAmount: 0, decimals: 0, amount: '0' }),
-        targetPubkey ? getSolBalance(targetPubkey, true) : Promise.resolve(0),
+        targetPubkey ? getTokenBalance(targetPubkey, address, false) : Promise.resolve({ uiAmount: 0, decimals: 0, amount: '0' }),
+        targetPubkey ? getSolBalance(targetPubkey, false) : Promise.resolve(0),
         getSolPriceUsd(),
       ]);
 
@@ -349,6 +349,23 @@ export function createWebServer() {
         solPriceUsd,
         position,
       });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * Token OHLCV Candlestick Feed for TradingView Lightweight Charts
+   */
+  app.get('/api/token/:address/candles', async (req, res) => {
+    try {
+      const address = req.params.address.trim();
+      if (!isValidSolanaAddress(address)) {
+        return res.status(400).json({ success: false, error: 'Invalid Solana address' });
+      }
+      const timeframe = ((req.query.timeframe as string) || (req.query.tf as string) || '15m').trim();
+      const candles = await fetchTokenOHLCV(address, timeframe);
+      res.json({ success: true, candles });
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
     }
