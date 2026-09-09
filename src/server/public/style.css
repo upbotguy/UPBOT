@@ -307,6 +307,113 @@ body {
   padding: 4px 8px;
 }
 
+.btn-clear-search {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
+.btn-clear-search:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.btn-clear-search.hidden {
+  display: none !important;
+}
+
+.search-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 100%;
+  background: #0d131f;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.85);
+  z-index: 99999;
+  max-height: 380px;
+  overflow-y: auto;
+  backdrop-filter: blur(14px);
+}
+
+.search-dropdown.hidden {
+  display: none !important;
+}
+
+.search-result-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.search-result-item:last-child {
+  border-bottom: none;
+}
+
+.search-result-item:hover {
+  background: rgba(0, 255, 163, 0.1);
+}
+
+.search-result-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.search-result-img {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #111;
+  border: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.search-result-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.search-result-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.search-result-symbol {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--solana-cyan);
+}
+
+.search-result-right {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.search-empty-item {
+  padding: 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .wallet-mode-tabs {
   display: flex;
   background: var(--bg-card);

@@ -49,7 +49,7 @@ import {
   getWalletPortfolio,
   isValidSolanaAddress,
 } from '../services/wallet.js';
-import { fetchTokenInfo, fetchLiveTokenPrices } from '../services/token.js';
+import { fetchTokenInfo, fetchLiveTokenPrices, searchTokens, getSolPriceUsd } from '../services/token.js';
 import { getJupiterQuote, executeJupiterSwap } from '../services/swap.js';
 import { generatePnLCard } from '../services/pnlCard.js';
 
@@ -275,6 +275,43 @@ export function createWebServer() {
   });
 
   /**
+   * Search Tokens by Name, Symbol, or Address
+   */
+  app.get('/api/tokens/search', async (req, res) => {
+    try {
+      const q = ((req.query.q as string) || '').trim();
+      if (!q) {
+        return res.json({ success: true, tokens: [] });
+      }
+
+      // If valid Solana address, directly try fetching info
+      if (isValidSolanaAddress(q)) {
+        const info = await fetchTokenInfo(q, true);
+        if (info) {
+          return res.json({
+            success: true,
+            tokens: [{
+              address: info.address,
+              name: info.name,
+              symbol: info.symbol,
+              priceUsd: info.priceUsd,
+              marketCap: info.marketCap,
+              liquidityUsd: info.liquidityUsd,
+              volume24h: info.volume24h,
+              image: ''
+            }]
+          });
+        }
+      }
+
+      const tokens = await searchTokens(q);
+      res.json({ success: true, tokens });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
    * Token Details & Live Position
    */
   app.get('/api/token/:address', async (req, res) => {
@@ -291,23 +328,25 @@ export function createWebServer() {
         ? queryAddress
         : activeWallet?.publicKey;
 
-      const [token, tokenBal, solBal] = await Promise.all([
+      const [token, tokenBal, solBal, solPriceUsd] = await Promise.all([
         fetchTokenInfo(address, true),
         targetPubkey ? getTokenBalance(targetPubkey, address, true) : Promise.resolve({ uiAmount: 0, decimals: 0, amount: '0' }),
         targetPubkey ? getSolBalance(targetPubkey, true) : Promise.resolve(0),
+        getSolPriceUsd(),
       ]);
 
       if (!token) {
         return res.status(404).json({ success: false, error: 'Token not found on Solana Network' });
       }
 
-      const position = getUserTokenPosition(userId, address, targetPubkey);
+      const position = getUserTokenPosition(userId, address, targetPubkey, solPriceUsd);
 
       res.json({
         success: true,
         token,
         tokenBalance: tokenBal,
         solBalance: solBal,
+        solPriceUsd,
         position,
       });
     } catch (err: any) {
@@ -388,9 +427,20 @@ export function createWebServer() {
       });
 
       if (swapResult.success && swapResult.signature) {
-        const token = await fetchTokenInfo(tokenAddress);
-        const outEstimate = (parseInt(quote.outAmount) / 1e6).toFixed(2);
-        const boughtTokens = parseFloat(outEstimate) || (parseInt(quote.outAmount) / 10 ** (token?.decimals || 6));
+        const [token, solPriceUsd] = await Promise.all([
+          fetchTokenInfo(tokenAddress),
+          getSolPriceUsd(),
+        ]);
+        const decimals = token?.decimals ?? 6;
+        const rawBought = parseInt(quote.outAmount) / 10 ** decimals;
+        const boughtTokens = rawBought > 0 ? rawBought : (parseFloat(quote.outAmount) / 1e6);
+        const outEstimate = boughtTokens.toLocaleString();
+
+        // Calculate true executed price from SOL spent
+        const executedPriceUsd = boughtTokens > 0 ? (solAmount * solPriceUsd) / boughtTokens : (token?.priceUsd || 0);
+        const executedMc = token?.priceUsd && token.priceUsd > 0
+          ? (executedPriceUsd / token.priceUsd) * (token.marketCap || 0)
+          : (token?.marketCap || 0);
 
         recordTrade({
           userId,
@@ -400,8 +450,8 @@ export function createWebServer() {
           tradeType: 'BUY',
           amountSol: solAmount,
           tokenAmount: boughtTokens,
-          priceUsd: token?.priceUsd || 0,
-          marketCapUsd: token?.marketCap || 0,
+          priceUsd: executedPriceUsd,
+          marketCapUsd: executedMc,
           txSignature: swapResult.signature,
         });
 
@@ -464,9 +514,19 @@ export function createWebServer() {
       });
 
       if (swapResult.success && swapResult.signature) {
-        const token = await fetchTokenInfo(tokenAddress);
+        const [token, solPriceUsd] = await Promise.all([
+          fetchTokenInfo(tokenAddress),
+          getSolPriceUsd(),
+        ]);
         const outSol = (parseInt(quote.outAmount) / LAMPORTS_PER_SOL).toFixed(4);
-        const soldTokens = tokenBal.uiAmount * (percent / 100);
+        const outSolNum = parseFloat(outSol) || (parseInt(quote.outAmount) / LAMPORTS_PER_SOL);
+        const soldTokens = tokenBal.uiAmount * (parsedPercent / 100);
+
+        // Real execution price on sell
+        const executedPriceUsd = soldTokens > 0 ? (outSolNum * solPriceUsd) / soldTokens : (token?.priceUsd || 0);
+        const executedMc = token?.priceUsd && token.priceUsd > 0
+          ? (executedPriceUsd / token.priceUsd) * (token.marketCap || 0)
+          : (token?.marketCap || 0);
 
         recordTrade({
           userId,
@@ -474,10 +534,10 @@ export function createWebServer() {
           tokenAddress,
           tokenSymbol: token?.symbol || 'TOKEN',
           tradeType: 'SELL',
-          amountSol: parseFloat(outSol) || 0,
+          amountSol: outSolNum,
           tokenAmount: soldTokens,
-          priceUsd: token?.priceUsd || 0,
-          marketCapUsd: token?.marketCap || 0,
+          priceUsd: executedPriceUsd,
+          marketCapUsd: executedMc,
           txSignature: swapResult.signature,
         });
 
@@ -521,6 +581,7 @@ export function createWebServer() {
         condition,
         amountSol,
         amountPercent,
+        slippageBps,
       } = req.body;
 
       const { userId, activeWallet } = getWebActiveWallet();
@@ -539,6 +600,7 @@ export function createWebServer() {
         condition,
         amountSol: amountSol || null,
         amountPercent: amountPercent || null,
+        slippageBps: slippageBps ? parseInt(slippageBps, 10) : 500,
       });
 
       res.json({ success: true, order });
@@ -705,16 +767,17 @@ export function createWebServer() {
       const address = req.params.address.trim();
       const { userId, activeWallet } = getWebActiveWallet();
 
-      const [token, tokenBal] = await Promise.all([
+      const [token, tokenBal, solPriceUsd] = await Promise.all([
         fetchTokenInfo(address, true),
         activeWallet ? getTokenBalance(activeWallet.publicKey, address, true) : Promise.resolve({ uiAmount: 0 }),
+        getSolPriceUsd(),
       ]);
 
       if (!token) {
         return res.status(404).send('Token not found');
       }
 
-      const position = getUserTokenPosition(userId, address, activeWallet?.publicKey);
+      const position = getUserTokenPosition(userId, address, activeWallet?.publicKey, solPriceUsd);
       const entryPrice = position && position.avgEntryPriceUsd > 0 ? position.avgEntryPriceUsd : token.priceUsd;
       const entryMc = position && position.avgEntryMarketCap > 0 ? position.avgEntryMarketCap : token.marketCap;
       const pnlPercent = entryPrice > 0 ? ((token.priceUsd - entryPrice) / entryPrice) * 100 : 0;
@@ -732,7 +795,7 @@ export function createWebServer() {
         profitUsd,
         holdingTokens,
         walletAddress: activeWallet?.publicKey,
-        botUsername: 'MyanBotAi_bot',
+        botUsername: CONFIG.BOT_USERNAME || 'sol_quickbot',
       });
 
       res.setHeader('Content-Type', 'image/png');
@@ -1044,10 +1107,13 @@ export function createWebServer() {
         return res.status(400).json({ success: false, error: 'Failed to build transaction from Jupiter' });
       }
 
+      const solPriceUsd = await getSolPriceUsd();
+
       res.json({
         success: true,
         quote,
         swapTransaction,
+        solPriceUsd,
       });
     } catch (err: any) {
       console.error('Error building swap tx for extension:', err?.response?.data || err.message);
@@ -1099,6 +1165,17 @@ export function createWebServer() {
       } = req.body;
 
       const { userId } = getWebActiveWallet();
+      const parsedSol = parseFloat(amountSol) || 0;
+      let parsedTokens = parseFloat(tokenAmount) || 0;
+      let parsedPrice = parseFloat(priceUsd) || 0;
+      let parsedMc = parseFloat(marketCapUsd) || 0;
+
+      const solPriceUsd = await getSolPriceUsd();
+
+      // Ensure exact execution price calculation if SOL and tokens are present
+      if (parsedSol > 0 && parsedTokens > 0) {
+        parsedPrice = (parsedSol * solPriceUsd) / parsedTokens;
+      }
 
       recordTrade({
         userId,
@@ -1106,10 +1183,10 @@ export function createWebServer() {
         tokenAddress,
         tokenSymbol: tokenSymbol || 'TOKEN',
         tradeType: tradeType || 'BUY',
-        amountSol: parseFloat(amountSol) || 0,
-        tokenAmount: parseFloat(tokenAmount) || 0,
-        priceUsd: parseFloat(priceUsd) || 0,
-        marketCapUsd: parseFloat(marketCapUsd) || 0,
+        amountSol: parsedSol,
+        tokenAmount: parsedTokens,
+        priceUsd: parsedPrice,
+        marketCapUsd: parsedMc,
         txSignature: txSignature || '',
       });
 

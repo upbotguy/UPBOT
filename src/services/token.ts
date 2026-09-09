@@ -237,3 +237,55 @@ export function formatChange(val: number): string {
   if (val < 0) return `🔴 ${val.toFixed(2)}%`;
   return `⚪ 0.00%`;
 }
+
+/**
+ * Search tokens via DexScreener API with Solana filter
+ */
+export async function searchTokens(query: string): Promise<any[]> {
+  const cleanQ = query.trim().replace(/^[$#]/, '');
+  if (!cleanQ) return [];
+
+  try {
+    const url = `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(cleanQ)}`;
+    const res = await axios.get(url, { timeout: 4000 });
+    const pairs = (res.data?.pairs || []).filter((p: any) => p.chainId === 'solana');
+    const seen = new Set<string>();
+    const tokens: any[] = [];
+
+    for (const p of pairs) {
+      const addr = p.baseToken?.address;
+      if (addr && !seen.has(addr)) {
+        seen.add(addr);
+        tokens.push({
+          address: addr,
+          name: p.baseToken.name || 'Unknown',
+          symbol: p.baseToken.symbol || 'TOKEN',
+          priceUsd: parseFloat(p.priceUsd || '0'),
+          marketCap: p.marketCap || p.fdv || 0,
+          liquidityUsd: p.liquidity?.usd || 0,
+          volume24h: p.volume?.h24 || 0,
+          image: p.info?.imageUrl || ''
+        });
+      }
+      if (tokens.length >= 8) break;
+    }
+
+    return tokens;
+  } catch (err: any) {
+    console.warn('Search tokens error:', err.message);
+    return [];
+  }
+}
+
+/**
+ * Fetch live SOL price in USD (with fallback)
+ */
+export async function getSolPriceUsd(): Promise<number> {
+  try {
+    const solInfo = await fetchTokenInfo('So11111111111111111111111111111111111111112');
+    if (solInfo && solInfo.priceUsd > 0) {
+      return solInfo.priceUsd;
+    }
+  } catch {}
+  return 102.75;
+}

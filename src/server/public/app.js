@@ -366,7 +366,7 @@ function setQuickSlippage(slipBps) {
     el.innerText = `${pct}%`;
   });
 
-  const customInputs = document.querySelectorAll('#quickCustomSlippage, #settingCustomSlippage');
+  const customInputs = document.querySelectorAll('#quickCustomSlippage, #settingCustomSlippage, #quickCustomLimitSlippage');
   customInputs.forEach((inp) => {
     inp.value = pct;
   });
@@ -403,7 +403,7 @@ function handleCustomSlippageInput(val) {
     el.innerText = `${pct}%`;
   });
 
-  const otherInputs = document.querySelectorAll('#quickCustomSlippage, #settingCustomSlippage');
+  const otherInputs = document.querySelectorAll('#quickCustomSlippage, #settingCustomSlippage, #quickCustomLimitSlippage');
   otherInputs.forEach((inp) => {
     if (inp.value !== val) inp.value = val;
   });
@@ -1121,8 +1121,137 @@ async function loadExtensionBalance() {
   }
 }
 
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+let tokenSearchDebounceTimer = null;
+
+function handleTokenSearchInput(val) {
+  const query = val ? val.trim() : '';
+  const clearBtn = document.getElementById('btnClearSearch');
+  if (clearBtn) {
+    clearBtn.classList.toggle('hidden', !val || val.length === 0);
+  }
+
+  clearTimeout(tokenSearchDebounceTimer);
+  tokenSearchDebounceTimer = setTimeout(() => {
+    renderTokenSearchDropdown(query);
+  }, 200);
+}
+window.handleTokenSearchInput = handleTokenSearchInput;
+
+function clearTokenSearch() {
+  const input = document.getElementById('tokenInput');
+  const clearBtn = document.getElementById('btnClearSearch');
+  const dropdown = document.getElementById('searchDropdownResults');
+  if (input) {
+    input.value = '';
+    input.focus();
+  }
+  if (clearBtn) clearBtn.classList.add('hidden');
+  if (dropdown) {
+    dropdown.classList.add('hidden');
+    dropdown.innerHTML = '';
+  }
+}
+window.clearTokenSearch = clearTokenSearch;
+
+async function renderTokenSearchDropdown(query) {
+  const dropdown = document.getElementById('searchDropdownResults');
+  if (!dropdown) return;
+
+  if (!query || query.length === 0) {
+    dropdown.classList.add('hidden');
+    dropdown.innerHTML = '';
+    return;
+  }
+
+  try {
+    const res = await safeFetchJson(`/api/tokens/search?q=${encodeURIComponent(query)}`);
+    const matches = res.success && Array.isArray(res.tokens) ? res.tokens : [];
+
+    dropdown.classList.remove('hidden');
+    dropdown.innerHTML = '';
+
+    if (matches.length === 0) {
+      dropdown.innerHTML = `<div class="search-empty-item">No tokens found matching "${escapeHtml(query)}"</div>`;
+      return;
+    }
+
+    matches.slice(0, 8).forEach((token) => {
+      const item = document.createElement('div');
+      item.className = 'search-result-item';
+      item.onclick = (e) => {
+        e.stopPropagation();
+        dropdown.classList.add('hidden');
+        const input = document.getElementById('tokenInput');
+        if (input) input.value = token.address;
+        const clearBtn = document.getElementById('btnClearSearch');
+        if (clearBtn) clearBtn.classList.remove('hidden');
+        loadToken(token.address);
+      };
+
+      const priceStr = token.priceUsd < 0.0001 ? `$${token.priceUsd.toExponential(4)}` : `$${token.priceUsd.toFixed(6)}`;
+      const mcStr = formatBigNumber(token.marketCap);
+      const fallbackImg = 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png';
+      const imgSrc = token.image || fallbackImg;
+
+      item.innerHTML = `
+        <div class="search-result-left">
+          <img src="${imgSrc}" alt="${escapeHtml(token.name)}" class="search-result-img" onerror="this.src='${fallbackImg}'" />
+          <div class="search-result-info">
+            <span class="search-result-name">${escapeHtml(token.name)}</span>
+            <span class="search-result-symbol">$${escapeHtml(token.symbol)} · <span style="opacity: 0.65; font-size: 10px;">${token.address.slice(0, 4)}...${token.address.slice(-4)}</span></span>
+          </div>
+        </div>
+        <div class="search-result-right">
+          <div style="color: #fff; font-weight: 700;">${priceStr}</div>
+          <div style="color: var(--solana-cyan); font-size: 10px;">MC: ${mcStr}</div>
+        </div>
+      `;
+      dropdown.appendChild(item);
+    });
+  } catch (err) {
+    console.warn('Search dropdown fetch error:', err);
+  }
+}
+window.renderTokenSearchDropdown = renderTokenSearchDropdown;
+
+function handleTokenSearchKeydown(e) {
+  const dropdown = document.getElementById('searchDropdownResults');
+  if (e.key === 'Enter') {
+    const firstItem = dropdown && !dropdown.classList.contains('hidden') ? dropdown.querySelector('.search-result-item') : null;
+    if (firstItem) {
+      firstItem.click();
+    } else {
+      handleLoadTokenClick();
+    }
+  } else if (e.key === 'Escape') {
+    if (dropdown) dropdown.classList.add('hidden');
+  }
+}
+window.handleTokenSearchKeydown = handleTokenSearchKeydown;
+
+// Close search dropdown when clicking outside
+document.addEventListener('click', (e) => {
+  const searchBox = document.querySelector('.search-box');
+  const dropdown = document.getElementById('searchDropdownResults');
+  if (dropdown && searchBox && !searchBox.contains(e.target) && !dropdown.contains(e.target)) {
+    dropdown.classList.add('hidden');
+  }
+});
+
 function handleLoadTokenClick() {
   const input = document.getElementById('tokenInput');
+  const dropdown = document.getElementById('searchDropdownResults');
+  if (dropdown) dropdown.classList.add('hidden');
   if (input && input.value.trim()) {
     loadToken(input.value.trim());
   }
@@ -1133,12 +1262,6 @@ window.handleLoadTokenClick = handleLoadTokenClick;
 function setupEventListeners() {
   // Load Token Input
   document.getElementById('btnLoadToken')?.addEventListener('click', handleLoadTokenClick);
-
-  document.getElementById('tokenInput')?.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      handleLoadTokenClick();
-    }
-  });
 
   // Top Tabs: Instant Swap vs Limit Orders
   document.querySelectorAll('.trade-tab').forEach((btn) => {
@@ -1594,7 +1717,14 @@ async function loadToken(address, isBackground = false) {
       const entryMc = pos && pos.avgEntryMarketCap > 0 ? pos.avgEntryMarketCap : currentTokenData.marketCap;
       const pnlPct = entryPrice > 0 ? ((currentTokenData.priceUsd - entryPrice) / entryPrice) * 100 : 0;
 
-      document.getElementById('posEntryPrice').innerText = `$${entryPrice < 0.01 ? entryPrice.toFixed(6) : entryPrice.toFixed(4)}`;
+      if (pos && pos.avgEntryPriceSol > 0) {
+        const solEntryStr = pos.avgEntryPriceSol < 0.0001
+          ? pos.avgEntryPriceSol.toExponential(2)
+          : pos.avgEntryPriceSol.toFixed(6);
+        document.getElementById('posEntryPrice').innerHTML = `$${entryPrice < 0.01 ? entryPrice.toFixed(6) : entryPrice.toFixed(4)} <span style="font-size:11px; color:#888; font-weight:normal;">(${solEntryStr} SOL)</span>`;
+      } else {
+        document.getElementById('posEntryPrice').innerText = `$${entryPrice < 0.01 ? entryPrice.toFixed(6) : entryPrice.toFixed(4)}`;
+      }
       document.getElementById('posEntryMc').innerText = formatBigNumber(entryMc);
 
       const pnlEl = document.getElementById('posPnl');
@@ -1770,7 +1900,15 @@ async function executeBuy() {
 
       showToast(`Buy Transaction Sent! Tx: ${signature.slice(0, 8)}...`, 'success');
 
-      // Record trade to DB for PnL
+      // Record trade to DB for PnL with exact execution price
+      const decimals = currentTokenData?.decimals || 6;
+      const quoteOut = data.quote?.outAmount ? (Number(data.quote.outAmount) / 10 ** decimals) : 0;
+      const solPrice = data.solPriceUsd || 102.75;
+      const executedPriceUsd = quoteOut > 0 ? (amount * solPrice) / quoteOut : (currentTokenData?.priceUsd || 0);
+      const executedMc = currentTokenData?.priceUsd && currentTokenData.priceUsd > 0
+        ? (executedPriceUsd / currentTokenData.priceUsd) * (currentTokenData.marketCap || 0)
+        : (currentTokenData?.marketCap || 0);
+
       await safeFetchJson('/api/trade/record-external-trade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1780,9 +1918,9 @@ async function executeBuy() {
           tokenSymbol: currentTokenData?.symbol || 'TOKEN',
           tradeType: 'BUY',
           amountSol: amount,
-          tokenAmount: 0,
-          priceUsd: currentTokenData?.priceUsd || 0,
-          marketCapUsd: currentTokenData?.marketCap || 0,
+          tokenAmount: quoteOut,
+          priceUsd: executedPriceUsd,
+          marketCapUsd: executedMc,
           txSignature: signature,
         }),
       });
@@ -1869,7 +2007,17 @@ async function executeSell() {
 
       showToast(`Sell Transaction Sent! Tx: ${signature.slice(0, 8)}...`, 'success');
 
-      // Record trade to DB
+      // Record trade to DB with exact execution price
+      const quoteOutLamports = data.quote?.outAmount ? Number(data.quote.outAmount) : 0;
+      const outSol = quoteOutLamports > 0 ? quoteOutLamports / 1e9 : 0;
+      const holdingTokens = extWallet.tokenBalance?.uiAmount || 0;
+      const soldTokens = (holdingTokens * percent) / 100;
+      const solPrice = data.solPriceUsd || 102.75;
+      const executedPriceUsd = soldTokens > 0 ? (outSol * solPrice) / soldTokens : (currentTokenData?.priceUsd || 0);
+      const executedMc = currentTokenData?.priceUsd && currentTokenData.priceUsd > 0
+        ? (executedPriceUsd / currentTokenData.priceUsd) * (currentTokenData.marketCap || 0)
+        : (currentTokenData?.marketCap || 0);
+
       await safeFetchJson('/api/trade/record-external-trade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1878,10 +2026,10 @@ async function executeSell() {
           tokenAddress: currentTokenAddress,
           tokenSymbol: currentTokenData?.symbol || 'TOKEN',
           tradeType: 'SELL',
-          amountSol: 0,
-          tokenAmount: 0,
-          priceUsd: currentTokenData?.priceUsd || 0,
-          marketCapUsd: currentTokenData?.marketCap || 0,
+          amountSol: outSol,
+          tokenAmount: soldTokens,
+          priceUsd: executedPriceUsd,
+          marketCapUsd: executedMc,
           txSignature: signature,
         }),
       });
@@ -1968,6 +2116,7 @@ async function createLimitOrderUI(orderType) {
         condition,
         amountSol,
         amountPercent,
+        slippageBps: userSettings.slippage_bps || 500,
       }),
     });
 
@@ -2105,7 +2254,7 @@ async function loadOrders() {
         <td><span class="${o.order_type === 'BUY_LIMIT' ? 'pos-pnl-val' : 'negative'}">${o.order_type}</span></td>
         <td><strong>$${o.token_symbol}</strong></td>
         <td>$${o.target_price_usd < 0.01 ? o.target_price_usd.toFixed(6) : o.target_price_usd.toFixed(4)} (${o.condition})</td>
-        <td>${o.order_type === 'BUY_LIMIT' ? `${o.amount_sol} SOL` : `${o.amount_percent}%`}</td>
+        <td>${o.order_type === 'BUY_LIMIT' ? `${o.amount_sol} SOL` : `${o.amount_percent}%`} <span style="font-size: 11px; opacity: 0.75;">(${(o.slippage_bps ? o.slippage_bps / 100 : 5).toFixed(1)}% slip)</span></td>
         <td><span class="dex-pill">${o.status}</span></td>
         <td>${new Date(o.created_at).toLocaleTimeString()}</td>
         <td>

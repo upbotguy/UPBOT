@@ -25,12 +25,17 @@
       </div>
     </div>
 
-    <div class="nav-center">
+    <div class="nav-center" style="position: relative;">
       <div class="search-box">
         <span class="search-icon"><svg class="svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span>
-        <input type="text" id="tokenInput" placeholder="Paste Solana Token Address (CA)..." autocomplete="off" onkeydown="if(event.key==='Enter')handleLoadTokenClick()" />
+        <input type="text" id="tokenInput" placeholder="Search by name, ticker ($SHIT), or CA..." autocomplete="off" oninput="handleTokenSearchInput(this.value)" onfocus="handleTokenSearchInput(this.value)" onkeydown="handleTokenSearchKeydown(event)" />
+        <button id="btnClearSearch" class="btn-clear-search hidden" onclick="clearTokenSearch()" title="Clear search">
+          <svg class="svg-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
         <button id="btnLoadToken" class="btn-primary-sm" onclick="handleLoadTokenClick()">Load Token</button>
       </div>
+      <!-- Instant Search Dropdown Popup with Icons -->
+      <div id="searchDropdownResults" class="search-dropdown hidden"></div>
     </div>
 
     <div class="nav-right">
@@ -268,6 +273,25 @@
           <div class="diff-badge" id="diffBadge">-10.0% Dip</div>
         </div>
 
+        <!-- Slippage Tolerance Quick Selector Bar for Limit Orders -->
+        <div class="slippage-control-bar" style="margin-bottom: 12px;">
+          <div class="slippage-label">
+            <span><svg class="svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> Slippage Tolerance:</span>
+            <strong class="active-slip-val">5.0%</strong>
+          </div>
+          <div class="slippage-presets">
+            <button class="slip-chip-btn" data-slip="100" onclick="setQuickSlippage(100)">1.0%</button>
+            <button class="slip-chip-btn" data-slip="200" onclick="setQuickSlippage(200)">2.0%</button>
+            <button class="slip-chip-btn active" data-slip="500" onclick="setQuickSlippage(500)">5.0%</button>
+            <button class="slip-chip-btn" data-slip="1000" onclick="setQuickSlippage(1000)">10.0%</button>
+            <button class="slip-chip-btn" data-slip="2000" onclick="setQuickSlippage(2000)">20.0%</button>
+            <div class="slip-custom-mini" title="Enter custom slippage %">
+              <input type="number" id="quickCustomLimitSlippage" placeholder="Custom" step="0.1" min="0.1" max="100" value="5.0" oninput="handleCustomSlippageInput(this.value)" />
+              <span class="slip-pct-sign">%</span>
+            </div>
+          </div>
+        </div>
+
         <!-- LIMIT BUY FORM -->
         <div id="limitBuySection" class="trade-section">
           <label class="input-label">Select Dip % Target</label>
@@ -301,6 +325,11 @@
           <div class="custom-input-group">
             <span class="input-prefix">Buy SOL</span>
             <input type="number" id="limitBuySolAmount" placeholder="Amount SOL" step="0.01" value="0.1" />
+          </div>
+
+          <div class="trade-meta" style="margin-top: 8px; margin-bottom: 8px;">
+            <span>Order Type: <strong>Limit Buy</strong></span>
+            <span>Est. Slippage: <strong class="active-slip-val">5.0%</strong></span>
           </div>
 
           <button id="btnCreateLimitBuy" class="btn-execute buy"><svg class="svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg> Place Limit Buy Order</button>
@@ -338,6 +367,11 @@
           <div class="custom-input-group">
             <span class="input-prefix">Sell %</span>
             <input type="number" id="limitSellPercent" placeholder="Sell %" min="1" max="100" value="100" />
+          </div>
+
+          <div class="trade-meta" style="margin-top: 8px; margin-bottom: 8px;">
+            <span>Order Type: <strong>Limit Sell</strong></span>
+            <span>Est. Slippage: <strong class="active-slip-val">5.0%</strong></span>
           </div>
 
           <button id="btnCreateLimitSell" class="btn-execute sell"><svg class="svg-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg> Place Limit Sell Order</button>

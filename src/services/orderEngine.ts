@@ -10,7 +10,7 @@ import {
   DBLimitOrder,
   recordTrade,
 } from '../db/index.js';
-import { fetchLiveTokenPrices, formatCurrency } from './token.js';
+import { fetchLiveTokenPrices, formatCurrency, getSolPriceUsd } from './token.js';
 import { importWalletAuto, getTokenBalance, getSolBalance, formatAddress } from './wallet.js';
 import { getJupiterQuote, executeJupiterSwap } from './swap.js';
 import { CONFIG } from '../config.js';
@@ -130,7 +130,7 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
   }
 
   const settings = getUserSettings(order.user_id);
-  const slippageBps = settings.slippage_bps || 500;
+  const slippageBps = order.slippage_bps || settings.slippage_bps || 500;
   const priorityFeeLamports = Math.floor((settings.priority_fee_sol || 0.001) * LAMPORTS_PER_SOL);
 
   try {
@@ -174,6 +174,9 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
       if (swapResult.success && swapResult.signature) {
         updateLimitOrderStatus(order.id, 'EXECUTED', swapResult.signature);
         const outEstimate = (parseInt(quote.outAmount) / 1e6).toFixed(2);
+        const rawTokens = parseFloat(outEstimate) || (parseInt(quote.outAmount) / 1e6);
+        const solPriceUsd = await getSolPriceUsd();
+        const executedPriceUsd = rawTokens > 0 ? (solAmount * solPriceUsd) / rawTokens : triggerPrice;
 
         // Record trade for PnL & entry tracking
         recordTrade({
@@ -183,8 +186,8 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
           tokenSymbol: order.token_symbol,
           tradeType: 'BUY',
           amountSol: solAmount,
-          tokenAmount: parseFloat(outEstimate) || (parseInt(quote.outAmount) / 1e6),
-          priceUsd: triggerPrice,
+          tokenAmount: rawTokens,
+          priceUsd: executedPriceUsd,
           txSignature: swapResult.signature,
         });
 
@@ -255,7 +258,10 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
       if (swapResult.success && swapResult.signature) {
         updateLimitOrderStatus(order.id, 'EXECUTED', swapResult.signature);
         const outSol = (parseInt(quote.outAmount) / LAMPORTS_PER_SOL).toFixed(4);
+        const outSolNum = parseFloat(outSol) || 0;
         const soldAmountTokens = tokenBal.uiAmount * (percent / 100);
+        const solPriceUsd = await getSolPriceUsd();
+        const executedPriceUsd = soldAmountTokens > 0 ? (outSolNum * solPriceUsd) / soldAmountTokens : triggerPrice;
 
         // Record trade for PnL & entry tracking
         recordTrade({
@@ -264,9 +270,9 @@ async function executeTriggeredOrder(bot: Bot<MyContext>, order: DBLimitOrder, t
           tokenAddress: order.token_address,
           tokenSymbol: order.token_symbol,
           tradeType: 'SELL',
-          amountSol: parseFloat(outSol) || 0,
+          amountSol: outSolNum,
           tokenAmount: soldAmountTokens,
-          priceUsd: triggerPrice,
+          priceUsd: executedPriceUsd,
           txSignature: swapResult.signature,
         });
 

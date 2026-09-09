@@ -29,7 +29,7 @@ import {
   importWalletFromMnemonic,
   formatAddress,
 } from '../services/wallet.js';
-import { fetchTokenInfo, formatCurrency } from '../services/token.js';
+import { fetchTokenInfo, formatCurrency, getSolPriceUsd } from '../services/token.js';
 import {
   getTokenDashboardMessage,
   getOrderDetailMessage,
@@ -506,7 +506,14 @@ export async function executeBuyFlow(ctx: Context, tokenAddress: string, solAmou
     });
 
     if (swapResult.success && swapResult.signature) {
-      const boughtAmountTokens = parseFloat(outEstimate) || (parseInt(quote.outAmount) / 10 ** (token?.decimals || 6));
+      const decimals = token?.decimals || 6;
+      const boughtAmountTokens = parseInt(quote.outAmount) / 10 ** decimals;
+      const solPriceUsd = await getSolPriceUsd();
+      const executedPriceUsd = boughtAmountTokens > 0 ? (solAmount * solPriceUsd) / boughtAmountTokens : (token?.priceUsd || 0);
+      const executedMc = token?.priceUsd && token.priceUsd > 0
+        ? (executedPriceUsd / token.priceUsd) * (token.marketCap || 0)
+        : (token?.marketCap || 0);
+
       recordTrade({
         userId,
         walletAddress: activeWallet.publicKey,
@@ -515,8 +522,8 @@ export async function executeBuyFlow(ctx: Context, tokenAddress: string, solAmou
         tradeType: 'BUY',
         amountSol: solAmount,
         tokenAmount: boughtAmountTokens,
-        priceUsd: token?.priceUsd || 0,
-        marketCapUsd: token?.marketCap || 0,
+        priceUsd: executedPriceUsd,
+        marketCapUsd: executedMc,
         txSignature: swapResult.signature,
       });
 
@@ -628,16 +635,23 @@ export async function executeSellFlow(ctx: Context, tokenAddress: string, percen
 
     if (swapResult.success && swapResult.signature) {
       const soldAmountTokens = tokenBal.uiAmount * (percent / 100);
+      const outSolNum = parseFloat(outSol) || 0;
+      const solPriceUsd = await getSolPriceUsd();
+      const executedPriceUsd = soldAmountTokens > 0 ? (outSolNum * solPriceUsd) / soldAmountTokens : (token?.priceUsd || 0);
+      const executedMc = token?.priceUsd && token.priceUsd > 0
+        ? (executedPriceUsd / token.priceUsd) * (token.marketCap || 0)
+        : (token?.marketCap || 0);
+
       recordTrade({
         userId,
         walletAddress: activeWallet.publicKey,
         tokenAddress,
         tokenSymbol: symbol,
         tradeType: 'SELL',
-        amountSol: parseFloat(outSol) || 0,
+        amountSol: outSolNum,
         tokenAmount: soldAmountTokens,
-        priceUsd: token?.priceUsd || 0,
-        marketCapUsd: token?.marketCap || 0,
+        priceUsd: executedPriceUsd,
+        marketCapUsd: executedMc,
         txSignature: swapResult.signature,
       });
 

@@ -54,6 +54,7 @@ export interface DBLimitOrder {
   status: 'PENDING' | 'EXECUTING' | 'EXECUTED' | 'CANCELLED' | 'FAILED';
   error_message: string | null;
   tx_signature: string | null;
+  slippage_bps?: number | null;
   created_at: string;
   executed_at: string | null;
 }
@@ -68,6 +69,7 @@ export interface NewLimitOrder {
   condition: 'LTE' | 'GTE';
   amountSol?: number | null;
   amountPercent?: number | null;
+  slippageBps?: number | null;
 }
 
 export interface DBCopyTarget {
@@ -187,6 +189,7 @@ export function initDB() {
       condition TEXT NOT NULL,
       amount_sol REAL,
       amount_percent REAL,
+      slippage_bps INTEGER DEFAULT 500,
       status TEXT DEFAULT 'PENDING',
       error_message TEXT,
       tx_signature TEXT,
@@ -313,6 +316,9 @@ export function initDB() {
   } catch {}
   try {
     db.prepare('ALTER TABLE copy_targets ADD COLUMN max_sol_cap REAL DEFAULT 1.0').run();
+  } catch {}
+  try {
+    db.prepare('ALTER TABLE limit_orders ADD COLUMN slippage_bps INTEGER DEFAULT 500').run();
   } catch {}
 }
 
@@ -538,8 +544,8 @@ export function createLimitOrder(order: NewLimitOrder): DBLimitOrder {
     INSERT INTO limit_orders (
       user_id, wallet_address, token_address, token_symbol,
       order_type, target_price_usd, condition,
-      amount_sol, amount_percent, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')
+      amount_sol, amount_percent, slippage_bps, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')
   `);
 
   const result = insertStmt.run(
@@ -551,7 +557,8 @@ export function createLimitOrder(order: NewLimitOrder): DBLimitOrder {
     order.targetPriceUsd,
     order.condition,
     order.amountSol ?? null,
-    order.amountPercent ?? null
+    order.amountPercent ?? null,
+    order.slippageBps ?? 500
   );
 
   const newId = Number(result.lastInsertRowid);
@@ -686,6 +693,7 @@ export interface UserTokenPosition {
   totalSoldUsd: number;
   totalSoldSol: number;
   avgEntryPriceUsd: number;
+  avgEntryPriceSol: number;
   avgEntryMarketCap: number;
 }
 
@@ -725,7 +733,12 @@ export function recordTrade(trade: {
 /**
  * Get aggregated position & average entry for a user and token
  */
-export function getUserTokenPosition(userId: number, tokenAddress: string, walletAddress?: string): UserTokenPosition | null {
+export function getUserTokenPosition(
+  userId: number,
+  tokenAddress: string,
+  walletAddress?: string,
+  solPriceUsd?: number
+): UserTokenPosition | null {
   let query = `SELECT * FROM trades WHERE user_id = ? AND token_address = ?`;
   const params: any[] = [userId, tokenAddress];
   if (walletAddress) {
@@ -749,17 +762,29 @@ export function getUserTokenPosition(userId: number, tokenAddress: string, walle
   for (const row of rows) {
     if (row.trade_type === 'BUY') {
       totalBoughtTokens += row.token_amount;
-      totalSpentUsd += row.token_amount * row.price_usd;
       totalSpentSol += row.amount_sol;
+      
+      // Calculate real spent USD based on SOL spent if available, else price_usd
+      let rowSpentUsd = row.token_amount * row.price_usd;
+      if (row.amount_sol > 0 && solPriceUsd && solPriceUsd > 0) {
+        rowSpentUsd = row.amount_sol * solPriceUsd;
+      }
+      totalSpentUsd += rowSpentUsd;
       weightedMarketCapSum += (row.market_cap_usd || 0) * row.token_amount;
     } else if (row.trade_type === 'SELL') {
       totalSoldTokens += row.token_amount;
-      totalSoldUsd += row.token_amount * row.price_usd;
       totalSoldSol += row.amount_sol;
+
+      let rowSoldUsd = row.token_amount * row.price_usd;
+      if (row.amount_sol > 0 && solPriceUsd && solPriceUsd > 0) {
+        rowSoldUsd = row.amount_sol * solPriceUsd;
+      }
+      totalSoldUsd += rowSoldUsd;
     }
   }
 
   const currentHoldingTokens = Math.max(0, totalBoughtTokens - totalSoldTokens);
+  const avgEntryPriceSol = totalBoughtTokens > 0 ? totalSpentSol / totalBoughtTokens : 0;
   const avgEntryPriceUsd = totalBoughtTokens > 0 ? totalSpentUsd / totalBoughtTokens : 0;
   const avgEntryMarketCap = totalBoughtTokens > 0 ? weightedMarketCapSum / totalBoughtTokens : 0;
 
@@ -774,6 +799,7 @@ export function getUserTokenPosition(userId: number, tokenAddress: string, walle
     totalSoldUsd,
     totalSoldSol,
     avgEntryPriceUsd,
+    avgEntryPriceSol,
     avgEntryMarketCap,
   };
 }
