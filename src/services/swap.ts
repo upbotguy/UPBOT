@@ -168,7 +168,12 @@ export async function executeJupiterSwap(
 
         if (status) {
           if (status.err) {
-            finalError = `Transaction reverted: ${JSON.stringify(status.err)}`;
+            const errStr = JSON.stringify(status.err);
+            if (errStr.includes('"Custom":1') || errStr.includes('Custom": 1')) {
+              finalError = 'Insufficient SOL balance for network gas, priority fee & token account rent. Please keep at least 0.008 SOL buffer in your wallet.';
+            } else {
+              finalError = `Transaction reverted: ${errStr}`;
+            }
             break;
           }
           if (

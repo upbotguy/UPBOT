@@ -84,6 +84,57 @@ ADMIN_USERNAMES=your_telegram_username
 
 ---
 
+## 🗺️ Project Roadmap (6-Phase Protocol Evolution)
+
+Structured evolution from self-hosted bot to full decentralized trading suite.
+
+### Phase 1: Fair Launch & Core Bot `[DONE]`
+* [x] 1B $UPBOT Token Minted (`UPLs8yhf76YyB1DnEZGmjDBPE3okTT3ZdaEp2uWMo6t`)
+* [x] Raydium CPMM Pool Deployed
+* [x] 100% LP Locked on Streamflow (1-Year)
+* [x] Mint & Freeze Authority Revoked
+* [x] DexScreener Paid & Verified
+* [x] Live 0% Fee Jupiter V6 Terminal
+
+### Phase 2: Copy-Trading Engine `[DONE]`
+* [x] 1-Click Whale & KOL Auto-Copy
+* [x] Target Wallet Activity Tracker
+* [x] Custom Buy/Sell Multipliers
+* [x] Anti-MEV / Priority Fee Turbo
+* [x] Interactive PnL Card Generator
+* [x] 0.008 SOL Network Safety Reserve & Slippage Defense
+
+### Phase 3: UPBOT Fair Launchpad & 100% Auto-Buyback Burn `[IN PROGRESS]`
+* [x] Solana Bonding Curve AMM (0 Initial Seed Cost)
+* [x] Mandatory 1% Platform Fee (Treasury Vault)
+* [x] Creator Royalty Custom Allocation (0% - 4%)
+* [x] 100% Fee Auto-Buyback & Burn for $UPBOT via Raydium CPMM
+* [x] Token-2022 TransferFeeConfig On-Chain Extension
+* [x] Automatic Raydium DEX Graduation at 85 SOL
+
+### Phase 4: Multi-Chain (BSC / BNB) `[UPCOMING]`
+* [ ] BNB Chain (BSC) Integration
+* [ ] PancakeSwap V3 Direct Routing
+* [ ] Unified Dual-Chain Telegram Bot
+* [ ] Auto BNB/SOL Gas Station
+* [ ] Cross-Chain Token Bridge
+
+### Phase 5: TradFi & CEX Bridge `[PLANNED]`
+* [ ] Robinhood Portfolio Sync API
+* [ ] Real-time Stock & Forex Alerts
+* [ ] Top CEX (Binance, Bybit) Watcher
+* [ ] Cross-Market Arbitrage Signals
+* [ ] Global Macro Event Triggers
+
+### Phase 6: AI Sniper & RevShare `[FUTURE]`
+* [ ] AI Twitter & Social Sentiment Scanner
+* [ ] Autonomous Rug-Filter Sniper
+* [ ] $UPBOT Holder Revenue Sharing
+* [ ] DAO Governance & VIP Alpha Hub
+* [ ] Cross-DEX Liquidity Arbitrage
+
+---
+
 ## 🔒 Security & Privacy Notice
 UPBOT AI is 100% self-hosted and non-custodial. Your keys never leave your device. As a standard crypto safety best practice, always use a dedicated trading sub-wallet with only the funds you intend to trade.
 

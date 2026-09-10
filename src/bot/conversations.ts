@@ -461,11 +461,20 @@ export async function executeBuyFlow(ctx: Context, tokenAddress: string, solAmou
   }
 
   const solBalance = await getSolBalance(activeWallet.publicKey);
-  if (solBalance < solAmount) {
-    await ctx.reply(t.insufficient_sol_err(solAmount, solBalance), {
-      parse_mode: 'Markdown',
-      reply_markup: new InlineKeyboard().text(t.btn_refresh, `token:refresh:${tokenAddress}`),
-    });
+  const SAFETY_BUFFER_SOL = 0.008; // Gas + Priority Fee + Token ATA Rent Reserve
+  if (solBalance < solAmount + SAFETY_BUFFER_SOL) {
+    const maxAffordable = Math.max(0, parseFloat((solBalance - SAFETY_BUFFER_SOL).toFixed(4)));
+    await ctx.reply(
+      `*Insufficient SOL for Network Fees!*\n\n` +
+      `Your balance: *${solBalance.toFixed(4)} SOL*\n` +
+      `Requested Buy: *${solAmount} SOL*\n` +
+      `Required Gas/Rent Buffer: *${SAFETY_BUFFER_SOL} SOL*\n\n` +
+      `Recommended Max Buy: *${maxAffordable} SOL*`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: new InlineKeyboard().text(t.btn_refresh, `token:refresh:${tokenAddress}`),
+      }
+    );
     return;
   }
 
