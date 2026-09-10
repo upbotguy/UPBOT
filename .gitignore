@@ -6,6 +6,12 @@ package-lock.json
 .env
 .env.*
 !.env.example
+*keypair*.json
+*wallet*.json
+id.json
+*.pem
+*.key
+
 
 # Build Artifacts
 dist/
